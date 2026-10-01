@@ -1,0 +1,5 @@
+data/cards.json.bak
+data/cards.json.tmp
+analysis_logs/
+__pycache__/
+*.bin.gz

@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>定石カード最適化</title>
+<style>
+:root {
+  --bg: #f5f3ee; --panel: #ffffff; --text: #1f2328; --muted: #6a737d; --border: #d8d4cc;
+  --accent: #b5462c; --accent-2: #2f6f9f; --ok: #2e7d32; --bad: #c62828;
+  --board: #dcb35c; --board-line: #5a4320;
+  --chi: #8d6e3f; --chu: #6a4fb3; --umi: #1f7fb0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17181b; --panel: #212328; --text: #e6e6e6; --muted: #9aa0a6; --border: #3a3d44;
+    --accent: #e0745a; --accent-2: #6aaee0; --ok: #66bb6a; --bad: #ef5350;
+    --board: #c9a14e; --board-line: #4a3618;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; }
+.status { font-size: 12px; color: var(--muted); }
+.status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 4px; }
+.status.ok .dot { background: var(--ok); } .status.bad .dot { background: var(--bad); }
+main { display: grid; grid-template-columns: minmax(320px, 620px) minmax(320px, 1fr); gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.panel h2 { font-size: 14px; margin: 0 0 8px; }
+button { font: inherit; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent-2); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+select, input[type=number], input[type=text], textarea { font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+textarea { width: 100%; }
+label { cursor: pointer; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.muted { color: var(--muted); font-size: 12px; }
+#board-wrap { position: relative; }
+#board { width: 100%; height: auto; display: block; }
+.corners { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.corner { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.corner.mine { border-color: var(--accent-2); }
+.corner .title { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+.corner select { width: 100%; margin: 4px 0; }
+.attr { display: inline-block; min-width: 1.6em; text-align: center; border-radius: 4px; color: #fff; font-size: 12px; padding: 0 4px; }
+.attr.地 { background: var(--chi); } .attr.宙 { background: var(--chu); } .attr.海 { background: var(--umi); }
+.result { display: flex; gap: 16px; align-items: baseline; margin-top: 10px; flex-wrap: wrap; }
+.big { font-size: 28px; font-weight: 700; }
+.bar { height: 10px; background: #222; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.bar > div { height: 100%; background: #fafafa; }
+.tabs { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid var(--border); }
+.tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; }
+.tabs button.active { border-bottom-color: var(--accent); font-weight: 600; }
+.tab { display: none; } .tab.active { display: block; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: middle; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+tr.clickable { cursor: pointer; } tr.clickable:hover { background: var(--bg); }
+.scroll { max-height: 460px; overflow: auto; }
+.progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--accent-2); width: 0; transition: width .2s; }
+.good { color: var(--ok); } .badc { color: var(--bad); }
+.msg { white-space: pre-wrap; font-size: 12px; padding: 6px 8px; border-radius: 6px; background: var(--bg); margin-top: 6px; max-height: 160px; overflow: auto; }
+.msg:empty { display: none; }
+dialog { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); max-width: 760px; width: 95vw; }
+dialog::backdrop { background: rgba(0,0,0,.4); }
+.editor { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 700px) { .editor { grid-template-columns: 1fr; } }
+.matchup td { text-align: center; }
+.chips label { margin-right: 8px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>囲碁シル 定石カード最適化</h1>
+  <span id="engine-status" class="status"><span class="dot"></span>エンジン確認中…</span>
+  <span id="cards-status" class="status"></span>
+  <span style="flex:1"></span>
+  <button id="btn-update-cards" title="gonote の記事から最新のカードリストを取得">カードリスト更新</button>
+</header>
+
+<main>
+  <section class="panel">
+    <div id="board-wrap"><svg id="board" viewBox="0 0 400 400" aria-label="盤面"></svg></div>
+    <div class="corners" id="corners"></div>
+    <div class="row">
+      <button id="btn-eval" class="primary">勝率を計算</button>
+      <label><input type="checkbox" id="auto-eval" checked> 変更時に自動計算</label>
+      <label><input type="checkbox" id="show-numbers"> 手順番号を表示</label>
+    </div>
+    <div class="result">
+      <div><div class="muted">白（自分）の勝率</div><div class="big" id="wr">—</div></div>
+      <div><div class="muted">白の目数リード</div><div class="big" id="lead" style="font-size:20px">—</div></div>
+      <div style="flex:1;min-width:140px"><div class="bar"><div id="wr-bar" style="width:50%"></div></div><div class="muted" id="eval-note"></div></div>
+    </div>
+    <div id="matchup"></div>
+  </section>
+
+  <section class="panel">
+    <div class="tabs">
+      <button data-tab="opt" class="active">最適化</button>
+      <button data-tab="cards">カード一覧</button>
+      <button data-tab="settings">設定</button>
+    </div>
+
+    <div class="tab active" id="tab-opt">
+      <div class="row muted">相手（黒）の右上・左下の配置に対して、左上 (A) と右下 (B) のカードと反転を探索します。</div>
+      <div class="row chips"><b style="font-size:12px">使う属性:</b>
+        <label><input type="checkbox" class="attr-filter" value="地" checked> <span class="attr 地">地</span></label>
+        <label><input type="checkbox" class="attr-filter" value="宙" checked> <span class="attr 宙">宙</span></label>
+        <label><input type="checkbox" class="attr-filter" value="海" checked> <span class="attr 海">海</span></label>
+        <button id="btn-attr-advantage" title="相手のカードに有利な属性だけを使う">相手に有利な属性のみ</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="owned-only" checked> 所持カードのみ</label>
+        <label><input type="checkbox" id="try-flip" checked> 反転も試す</label>
+        <label><input type="checkbox" id="fix-tl"> 左上を固定</label>
+        <label><input type="checkbox" id="fix-br"> 右下を固定</label>
+      </div>
+      <div class="row">
+        <label>探索方法
+          <select id="search-mode">
+            <option value="two">高速（2 段階: 各隅で上位 K 件 → 組み合わせ）</option>
+            <option value="full">全探索（全組み合わせ）</option>
+          </select></label>
+        <label>K <input type="number" id="top-k" value="6" min="1" max="50" style="width:4em"></label>
+      </div>
+      <div class="row">
+        <button id="btn-optimize" class="primary">最適な配置を探す</button>
+        <button id="btn-cancel" disabled>中止</button>
+        <span class="muted" id="opt-info"></span>
+      </div>
+      <div class="progress"><div id="opt-progress"></div></div>
+      <div class="scroll" style="margin-top:8px">
+        <table id="opt-results"><thead><tr><th>#</th><th>白勝率</th><th>リード</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="muted">結果の行をクリックすると盤面に反映します。</div>
+    </div>
+
+    <div class="tab" id="tab-cards">
+      <div class="row">
+        <input type="text" id="card-search" placeholder="カード名で絞り込み" style="flex:1;min-width:140px">
+        <select id="card-slot-filter"><option value="">A/B すべて</option><option>A</option><option>B</option></select>
+        <button id="btn-new-card">＋ 新規カード</button>
+      </div>
+      <div class="row">
+        <button id="btn-all-owned">すべて所持</button>
+        <button id="btn-none-owned">すべて未所持</button>
+        <button id="btn-export">JSON 書き出し</button>
+        <button id="btn-import">JSON 読み込み</button>
+        <button id="btn-paste-html" title="記事ページの HTML / テキストを貼り付けて解析">ページ貼り付けで更新</button>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
+      </div>
+      <div class="msg" id="cards-msg"></div>
+      <div class="scroll">
+        <table id="card-table"><thead><tr><th>所持</th><th>名前</th><th>属性</th><th>配置</th><th>手数</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-settings">
+      <div class="row"><label>探索数 (visits) <input type="number" id="visits" value="100" min="1" max="5000" style="width:6em"></label></div>
+      <div class="row"><label>コミ <input type="number" id="komi" value="6.5" step="0.5" style="width:5em"></label>
+        <label>ルール <select id="rules"><option value="japanese">日本ルール</option><option value="chinese">中国ルール</option><option value="tromp-taylor">Tromp-Taylor</option></select></label></div>
+      <div class="row"><label>配置後の手番 <select id="next-player"><option value="B">黒番から</option><option value="W">白番から</option></select></label></div>
+      <div class="row"><label><input type="checkbox" id="owner-colors"> カードの初手側の石を、カードを置いたプレイヤーの色にする</label></div>
+      <div class="muted">オフ: カードに描かれた石の色のまま配置します。オン: 初手の石が「置いた側」の色になるよう、白側（自分）のカードは色を入れ替えます。</div>
+      <div class="row"><label>同時に送る局面数 <input type="number" id="batch" value="32" min="1" max="512" style="width:5em"></label></div>
+      <div class="row"><label>カード取得元 URL <input type="text" id="source-url" style="width:100%" value="https://gonote-app.com/article/TSqUCWy46aAwyoUyrix2"></label></div>
+    </div>
+  </section>
+</main>
+
+<dialog id="card-dialog">
+  <form method="dialog" id="card-form">
+    <h2 style="margin-top:0;font-size:15px">カード編集</h2>
+    <div class="editor">
+      <div>
+        <svg id="edit-board" viewBox="0 0 400 400" style="width:100%"></svg>
+        <div class="row">
+          <label>次の石 <select id="edit-color"><option value="B">黒</option><option value="W">白</option></select></label>
+          <label><input type="checkbox" id="edit-alternate" checked> 交互に</label>
+          <button type="button" id="edit-undo">1 手戻す</button>
+          <button type="button" id="edit-clear">クリア</button>
+        </div>
+        <div class="muted">盤をクリックして手順通りに石を置きます（取られた石は自動で除去）。カードに描かれている隅のまま入力してください。</div>
+      </div>
+      <div>
+        <div class="row"><label style="flex:1">名前 <input type="text" id="edit-name" style="width:100%" required></label></div>
+        <div class="row">
+          <label>属性 <select id="edit-attr"><option>地</option><option>宙</option><option>海</option></select></label>
+          <label>配置 <select id="edit-slot"><option value="A">A（上側）</option><option value="B">B（下側）</option></select></label>
+        </div>
+        <label>手順（SGF 形式、例: <code>;B[pd];W[qf];B[nc]</code>）</label>
+        <textarea id="edit-moves" rows="5"></textarea>
+        <div class="row"><button type="button" id="edit-apply-text">テキストを盤に反映</button></div>
+        <div class="msg" id="edit-msg"></div>
+      </div>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button type="button" id="edit-delete" class="badc" style="margin-right:auto">削除</button>
+      <button value="cancel" formnovalidate>キャンセル</button>
+      <button value="save" class="primary" id="edit-save">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="paste-dialog">
+  <form method="dialog">
+    <h2 style="margin-top:0;font-size:15px">ページ内容を貼り付けて更新</h2>
+    <div class="muted">サーバーから記事を取得できない場合に使います。ブラウザで記事を開き、開発者ツールの Elements からコピーした HTML（またはページの SGF・テキスト）を貼り付けてください。</div>
+    <textarea id="paste-html" rows="12"></textarea>
+    <div class="row" style="justify-content:flex-end">
+      <button value="cancel" formnovalidate>キャンセル</button>
+      <button value="ok" class="primary">解析して更新</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+const N = 19;
+const CORNERS = {
+  TL: { label: '左上', x: 0, y: 0, slot: 'A', mine: true },
+  TR: { label: '右上', x: 1, y: 0, slot: 'A', mine: false },
+  BL: { label: '左下', x: 0, y: 1, slot: 'B', mine: false },
+  BR: { label: '右下', x: 1, y: 1, slot: 'B', mine: true },
+};
+const CORNER_ORDER = ['TL', 'TR', 'BL', 'BR'];
+const BEATS = { '地': '海', '海': '宙', '宙': '地' };  // 地 > 海 > 宙 > 地
+const BEATEN_BY = Object.fromEntries(Object.entries(BEATS).map(([a, b]) => [b, a]));
+
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('igosil.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('igosil.' + k, JSON.stringify(v)); } catch {} },
+};
+
+let cards = [];
+let cardMeta = {};
+let notOwned = new Set(store.get('notOwned', []));
+let placement = store.get('placement', { TL: null, TR: null, BL: null, BR: null });
+let evalSeq = 0;
+let cancelOpt = false;
+
+// ---------------------------------------------------------------------------
+// 囲碁の基本処理
+// ---------------------------------------------------------------------------
+const sgfToXY = (v) => [v.charCodeAt(0) - 97, v.charCodeAt(1) - 97];
+const xyToSgf = (x, y) => String.fromCharCode(97 + x, 97 + y);
+const other = (c) => (c === 'B' ? 'W' : 'B');
+
+function neighbors(x, y) {
+  const r = [];
+  if (x > 0) r.push([x - 1, y]); if (x < N - 1) r.push([x + 1, y]);
+  if (y > 0) r.push([x, y - 1]); if (y < N - 1) r.push([x, y + 1]);
+  return r;
+}
+function groupAt(board, x, y) {
+  const c = board[y * N + x];
+  const stones = [], seen = new Set([y * N + x]), stack = [[x, y]];
+  let libs = 0; const libSeen = new Set();
+  while (stack.length) {
+    const [cx, cy] = stack.pop(); stones.push([cx, cy]);
+    for (const [nx, ny] of neighbors(cx, cy)) {
+      const i = ny * N + nx, v = board[i];
+      if (!v) { if (!libSeen.has(i)) { libSeen.add(i); libs++; } }
+      else if (v === c && !seen.has(i)) { seen.add(i); stack.push([nx, ny]); }
+    }
+  }
+  return { stones, libs };
+}
+/** 手順を空の盤に打って最終局面を返す。board[i] = 'B' | 'W' | undefined、order[i] = 手順番号 */
+function playMoves(moves) {
+  const board = new Array(N * N), order = new Array(N * N);
+  let n = 0;
+  for (const [c, x, y] of moves) {
+    n++;
+    if (x < 0 || y < 0 || x >= N || y >= N) continue;
+    board[y * N + x] = c; order[y * N + x] = n;
+    for (const [nx, ny] of neighbors(x, y)) {
+      if (board[ny * N + nx] === other(c)) {
+        const g = groupAt(board, nx, ny);
+        if (g.libs === 0) for (const [sx, sy] of g.stones) { board[sy * N + sx] = undefined; order[sy * N + sx] = undefined; }
+      }
+    }
+    const own = groupAt(board, x, y);
+    if (own.libs === 0) for (const [sx, sy] of own.stones) { board[sy * N + sx] = undefined; order[sy * N + sx] = undefined; }
+  }
+  return { board, order };
+}
+
+// ---------------------------------------------------------------------------
+// カードの配置（隅への写像と反転）
+// ---------------------------------------------------------------------------
+/** カードが描かれている隅（石の重心から判定） */
+function homeCorner(card) {
+  if (!card.moves.length) return { x: 1, y: card.slot === 'B' ? 1 : 0 };
+  let sx = 0, sy = 0;
+  for (const [, v] of card.moves) { const [x, y] = sgfToXY(v); sx += x; sy += y; }
+  const cx = sx / card.moves.length, cy = sy / card.moves.length;
+  return { x: cx > (N - 1) / 2 ? 1 : cx < (N - 1) / 2 ? 0 : 1, y: cy > (N - 1) / 2 ? 1 : cy < (N - 1) / 2 ? 0 : (card.slot === 'B' ? 1 : 0) };
+}
+/** 描かれた隅 → 置く隅 への写像。flip は隅の対角線で反転（カードの「反転」） */
+function mapPoint(x, y, home, target, flip) {
+  let u = home.x ? N - 1 - x : x, v = home.y ? N - 1 - y : y;
+  if (flip) [u, v] = [v, u];
+  return [target.x ? N - 1 - u : u, target.y ? N - 1 - v : v];
+}
+function placedCardStones(card, cornerKey, flip) {
+  const meta = cardMeta[card.id];
+  const corner = CORNERS[cornerKey];
+  const swap = $('#owner-colors').checked && corner.mine === (card.moves[0]?.[0] === 'B');
+  const res = [];
+  meta.final.board.forEach((c, i) => {
+    if (!c) return;
+    const [x, y] = mapPoint(i % N, Math.floor(i / N), meta.home, corner, flip);
+    res.push({ c: swap ? other(c) : c, x, y, n: meta.final.order[i], corner: cornerKey });
+  });
+  return res;
+}
+/** 配置から局面を作る。重なりや呼吸点ゼロの石があれば conflict を返す */
+function buildPosition(pl) {
+  const board = new Array(N * N), info = new Array(N * N), conflicts = [];
+  for (const key of CORNER_ORDER) {
+    const p = pl[key]; if (!p) continue;
+    const card = cardById(p.id); if (!card) continue;
+    for (const s of placedCardStones(card, key, p.flip)) {
+      const i = s.y * N + s.x;
+      if (board[i]) { conflicts.push({ x: s.x, y: s.y, reason: '石が重なっています' }); continue; }
+      board[i] = s.c; info[i] = s;
+    }
+  }
+  const checked = new Set();
+  for (let i = 0; i < N * N; i++) {
+    if (!board[i] || checked.has(i)) continue;
+    const g = groupAt(board, i % N, Math.floor(i / N));
+    g.stones.forEach(([x, y]) => checked.add(y * N + x));
+    if (g.libs === 0) g.stones.forEach(([x, y]) => conflicts.push({ x, y, reason: '呼吸点のない石があります' }));
+  }
+  const stones = [];
+  board.forEach((c, i) => { if (c) stones.push([c, i % N, Math.floor(i / N)]); });
+  return { stones, info, conflicts };
+}
+
+// ---------------------------------------------------------------------------
+// 盤面描画
+// ---------------------------------------------------------------------------
+function drawBoard(svg, stoneList, opts = {}) {
+  const S = 400, M = 20, G = (S - 2 * M) / (N - 1);
+  const P = (i) => M + i * G;
+  const parts = [`<rect width="${S}" height="${S}" fill="var(--board)" rx="6"/>`];
+  if (opts.quadrants) {
+    for (const key of CORNER_ORDER) {
+      const c = CORNERS[key];
+      const x0 = c.x ? S / 2 : 0, y0 = c.y ? S / 2 : 0;
+      if (c.mine) parts.push(`<rect x="${x0}" y="${y0}" width="${S / 2}" height="${S / 2}" fill="#2f6f9f" opacity=".08"/>`);
+    }
+  }
+  for (let i = 0; i < N; i++) {
+    parts.push(`<line x1="${P(0)}" y1="${P(i)}" x2="${P(N - 1)}" y2="${P(i)}" stroke="var(--board-line)" stroke-width="${i === 0 || i === N - 1 ? 1.4 : .7}"/>`);
+    parts.push(`<line x1="${P(i)}" y1="${P(0)}" x2="${P(i)}" y2="${P(N - 1)}" stroke="var(--board-line)" stroke-width="${i === 0 || i === N - 1 ? 1.4 : .7}"/>`);
+  }
+  for (const a of [3, 9, 15]) for (const b of [3, 9, 15]) parts.push(`<circle cx="${P(a)}" cy="${P(b)}" r="2.4" fill="var(--board-line)"/>`);
+  for (const s of stoneList) {
+    const fill = s.c === 'B' ? '#151515' : '#f7f7f7';
+    parts.push(`<circle cx="${P(s.x)}" cy="${P(s.y)}" r="${G * .47}" fill="${fill}" stroke="#000" stroke-width=".8"/>`);
+    if (opts.numbers && s.n) parts.push(`<text x="${P(s.x)}" y="${P(s.y) + 3.5}" font-size="10" text-anchor="middle" fill="${s.c === 'B' ? '#fff' : '#000'}">${s.n}</text>`);
+  }
+  for (const c of opts.conflicts || []) parts.push(`<path d="M${P(c.x) - 6} ${P(c.y) - 6}l12 12m0 -12l-12 12" stroke="#e53935" stroke-width="2.5"/>`);
+  if (opts.labels) {
+    for (const key of CORNER_ORDER) {
+      const c = CORNERS[key];
+      parts.push(`<text x="${c.x ? S - 6 : 6}" y="${c.y ? S - 5 : 13}" font-size="10" text-anchor="${c.x ? 'end' : 'start'}" fill="var(--board-line)">${c.label}${c.mine ? '（自分）' : '（相手）'}</text>`);
+    }
+  }
+  svg.innerHTML = parts.join('');
+  svg.dataset.grid = JSON.stringify({ M, G });
+}
+function svgPoint(svg, ev) {
+  const { M, G } = JSON.parse(svg.dataset.grid);
+  const r = svg.getBoundingClientRect();
+  const sx = (ev.clientX - r.left) * 400 / r.width, sy = (ev.clientY - r.top) * 400 / r.height;
+  const x = Math.round((sx - M) / G), y = Math.round((sy - M) / G);
+  return x >= 0 && y >= 0 && x < N && y < N ? [x, y] : null;
+}
+
+// ---------------------------------------------------------------------------
+// カードデータ
+// ---------------------------------------------------------------------------
+const cardById = (id) => cards.find((c) => c.id === id);
+const isOwned = (c) => !notOwned.has(c.id);
+const activeCards = () => cards.filter((c) => !c.retired);
+
+function rebuildMeta() {
+  cardMeta = {};
+  for (const c of cards) {
+    const moves = c.moves.map(([col, v]) => [col, ...sgfToXY(v)]);
+    cardMeta[c.id] = { home: homeCorner(c), final: playMoves(moves) };
+  }
+}
+async function loadCards() {
+  const data = await api('GET', '/api/cards');
+  cards = (data.cards || []).map((c) => ({ ...c, moves: c.moves || [] }));
+  rebuildMeta();
+  const st = $('#cards-status');
+  st.textContent = `カード ${activeCards().length} 枚` + (data.isSample ? '（サンプル: 「カードリスト更新」で取得してください）' : data.fetchedAt ? `（${data.fetchedAt.replace('T', ' ')} 取得）` : '');
+  st.className = 'status' + (data.isSample ? ' bad' : '');
+  for (const k of CORNER_ORDER) if (placement[k] && !cardById(placement[k].id)) placement[k] = null;
+  renderCorners(); renderCardTable(); renderAll();
+}
+async function saveCards() {
+  await api('POST', '/api/cards', { cards });
+  rebuildMeta();
+  await loadCards();
+}
+
+// ---------------------------------------------------------------------------
+// API
+// ---------------------------------------------------------------------------
+async function api(method, url, body) {
+  const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  if (!res.ok || data.error) { const e = new Error(data.error || `HTTP ${res.status}`); e.data = data; throw e; }
+  return data;
+}
+function analysisParams() {
+  return {
+    boardSize: N,
+    visits: +$('#visits').value || 100,
+    komi: +$('#komi').value,
+    rules: $('#rules').value,
+    nextPlayer: $('#next-player').value,
+  };
+}
+async function analyze(positions) {
+  const data = await api('POST', '/api/analyze', { ...analysisParams(), positions: positions.map((p) => ({ stones: p.stones })) });
+  return data.results;
+}
+async function refreshStatus() {
+  const el = $('#engine-status');
+  try {
+    const s = await api('GET', '/api/status');
+    el.className = 'status ' + (s.ok ? 'ok' : 'bad');
+    el.innerHTML = `<span class="dot"></span>${s.engine === 'mock' ? 'モック' : 'KataGo'}: ${s.message}`;
+    if (s.ok && /起動中/.test(s.message)) setTimeout(refreshStatus, 3000);
+  } catch (e) {
+    el.className = 'status bad';
+    el.innerHTML = '<span class="dot"></span>サーバーに接続できません（server.py を起動してください）';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 盤面と隅の UI
+// ---------------------------------------------------------------------------
+function cardLabel(c) { return `${c.name}${c.moves.length ? '' : '（手順未入力）'}`; }
+
+function renderCorners() {
+  const wrap = $('#corners');
+  wrap.innerHTML = '';
+  for (const key of ['TL', 'TR', 'BL', 'BR']) {
+    const c = CORNERS[key];
+    const div = document.createElement('div');
+    div.className = 'corner' + (c.mine ? ' mine' : '');
+    const opts = activeCards().filter((x) => x.slot === c.slot);
+    const groups = ['地', '宙', '海', ''].map((a) => {
+      const list = opts.filter((x) => (x.attr || '') === a);
+      if (!list.length) return '';
+      return `<optgroup label="${a || '属性不明'}">${list.map((x) => `<option value="${x.id}">${esc(cardLabel(x))}${c.mine && !isOwned(x) ? ' ※未所持' : ''}</option>`).join('')}</optgroup>`;
+    }).join('');
+    div.innerHTML = `<div class="title"><span>${c.label}（${c.mine ? '自分・白' : '相手・黒'}）配置 ${c.slot}</span><span class="attr-badge"></span></div>
+      <select data-corner="${key}"><option value="">（なし）</option>${groups}</select>
+      <label><input type="checkbox" data-flip="${key}"> 反転</label>`;
+    wrap.appendChild(div);
+    const sel = div.querySelector('select'), flip = div.querySelector('input');
+    sel.value = placement[key]?.id || '';
+    flip.checked = !!placement[key]?.flip;
+    sel.onchange = () => { placement[key] = sel.value ? { id: sel.value, flip: flip.checked } : null; onPlacementChange(); };
+    flip.onchange = () => { if (placement[key]) placement[key].flip = flip.checked; onPlacementChange(); };
+  }
+  updateBadges();
+}
+function updateBadges() {
+  for (const key of CORNER_ORDER) {
+    const badge = $(`#corners select[data-corner="${key}"]`)?.closest('.corner').querySelector('.attr-badge');
+    const card = placement[key] && cardById(placement[key].id);
+    if (badge) badge.innerHTML = card?.attr ? `<span class="attr ${card.attr}">${card.attr}</span>` : '';
+  }
+}
+function syncCornerInputs() {
+  for (const key of CORNER_ORDER) {
+    $(`#corners select[data-corner="${key}"]`).value = placement[key]?.id || '';
+    $(`#corners input[data-flip="${key}"]`).checked = !!placement[key]?.flip;
+  }
+}
+let lastPos = null;
+function renderAll() {
+  const pos = buildPosition(placement);
+  lastPos = pos;
+  const list = pos.stones.map(([c, x, y]) => ({ c, x, y, n: pos.info[y * N + x]?.n }));
+  drawBoard($('#board'), list, { quadrants: true, labels: true, conflicts: pos.conflicts, numbers: $('#show-numbers').checked });
+  updateBadges();
+  renderMatchup();
+  return pos;
+}
+function onPlacementChange() {
+  store.set('placement', placement);
+  renderAll();
+  setEval(null, '');
+  if ($('#auto-eval').checked) evaluateCurrent();
+}
+function setEval(r, note) {
+  if (!r) { $('#wr').textContent = '—'; $('#lead').textContent = '—'; $('#wr-bar').style.width = '50%'; $('#eval-note').textContent = note || ''; return; }
+  $('#wr').textContent = (r.winrateWhite * 100).toFixed(1) + '%';
+  $('#lead').textContent = (r.scoreLeadWhite >= 0 ? '+' : '') + r.scoreLeadWhite.toFixed(1);
+  $('#wr-bar').style.width = (r.winrateWhite * 100).toFixed(1) + '%';
+  $('#eval-note').textContent = note || `${r.visits ?? '?'} visits${r.cached ? '（キャッシュ）' : ''}`;
+}
+async function evaluateCurrent() {
+  const pos = renderAll();
+  const seq = ++evalSeq;
+  if (pos.conflicts.length) { setEval(null, '配置が衝突しています: ' + [...new Set(pos.conflicts.map((c) => c.reason))].join('、')); return; }
+  $('#eval-note').textContent = '計算中…';
+  try {
+    const [r] = await analyze([pos]);
+    if (seq !== evalSeq) return;
+    if (r.error) setEval(null, 'エラー: ' + r.error); else setEval(r);
+  } catch (e) { if (seq === evalSeq) setEval(null, 'エラー: ' + e.message); }
+}
+
+// 属性相性
+function relation(a, b) {
+  if (!a || !b || a === b) return 0;
+  return BEATS[a] === b ? 1 : BEATS[b] === a ? -1 : 0;
+}
+function matchupScore(pl) {
+  let s = 0;
+  for (const m of ['TL', 'BR']) for (const o of ['TR', 'BL']) {
+    const a = pl[m] && cardById(pl[m].id), b = pl[o] && cardById(pl[o].id);
+    if (a && b) s += relation(a.attr, b.attr);
+  }
+  return s;
+}
+function renderMatchup() {
+  const cell = (m, o) => {
+    const a = placement[m] && cardById(placement[m].id), b = placement[o] && cardById(placement[o].id);
+    if (!a || !b) return '<td class="muted">—</td>';
+    const r = relation(a.attr, b.attr);
+    return `<td class="${r > 0 ? 'good' : r < 0 ? 'badc' : 'muted'}">${r > 0 ? '有利' : r < 0 ? '不利' : '互角'}</td>`;
+  };
+  $('#matchup').innerHTML = `<table class="matchup" style="margin-top:10px"><thead><tr><th>属性相性（地 &gt; 海 &gt; 宙 &gt; 地）</th><th>vs 右上</th><th>vs 左下</th></tr></thead>
+    <tbody><tr><td style="text-align:left">左上</td>${cell('TL', 'TR')}${cell('TL', 'BL')}</tr>
+    <tr><td style="text-align:left">右下</td>${cell('BR', 'TR')}${cell('BR', 'BL')}</tr></tbody></table>`;
+}
+
+// ---------------------------------------------------------------------------
+// 最適化
+// ---------------------------------------------------------------------------
+function candidatesFor(cornerKey) {
+  const fixed = $(cornerKey === 'TL' ? '#fix-tl' : '#fix-br').checked;
+  if (fixed) return placement[cornerKey] ? [placement[cornerKey]] : [null];
+  const attrs = new Set($$('.attr-filter').filter((x) => x.checked).map((x) => x.value));
+  const ownedOnly = $('#owned-only').checked;
+  const flips = $('#try-flip').checked ? [false, true] : [false];
+  const res = [];
+  for (const c of activeCards()) {
+    if (c.slot !== CORNERS[cornerKey].slot || !c.moves.length) continue;
+    if (!attrs.has(c.attr)) continue;
+    if (ownedOnly && !isOwned(c)) continue;
+    for (const f of flips) res.push({ id: c.id, flip: f });
+  }
+  // 対称なカードは反転しても同じ局面になるので除外
+  const seen = new Set();
+  return res.filter((p) => {
+    const key = JSON.stringify(placedCardStones(cardById(p.id), cornerKey, p.flip).map((s) => [s.c, s.x, s.y]).sort());
+    if (seen.has(key)) return false; seen.add(key); return true;
+  });
+}
+async function evaluateMany(pls, onProgress) {
+  const batch = Math.max(1, +$('#batch').value || 32);
+  const out = [];
+  const valid = [];
+  for (const pl of pls) {
+    const pos = buildPosition(pl);
+    if (pos.conflicts.length) continue;
+    valid.push({ pl, pos });
+  }
+  for (let i = 0; i < valid.length; i += batch) {
+    if (cancelOpt) break;
+    const chunk = valid.slice(i, i + batch);
+    const res = await analyze(chunk.map((v) => v.pos));
+    chunk.forEach((v, j) => { if (!res[j].error) out.push({ pl: v.pl, ...res[j] }); });
+    onProgress(Math.min(valid.length, i + batch), valid.length);
+  }
+  return out;
+}
+async function optimize() {
+  if (!placement.TR || !placement.BL) {
+    if (!confirm('相手の右上・左下のカードが未設定です。このまま探索しますか？')) return;
+  }
+  const tl = candidatesFor('TL'), br = candidatesFor('BR');
+  if (!tl.length || !br.length) { alert('候補カードがありません（フィルター・所持設定・手順の入力を確認してください）'); return; }
+  cancelOpt = false;
+  $('#btn-optimize').disabled = true; $('#btn-cancel').disabled = false;
+  const bar = $('#opt-progress'), info = $('#opt-info');
+  const t0 = performance.now();
+  const base = { TR: placement.TR, BL: placement.BL };
+  let results = [];
+  try {
+    const mode = $('#search-mode').value;
+    const K = Math.max(1, +$('#top-k').value || 6);
+    if (mode === 'full' || (tl.length <= K && br.length <= K)) {
+      const pls = [];
+      for (const a of tl) for (const b of br) pls.push({ ...base, TL: a, BR: b });
+      info.textContent = `${pls.length} 通りを評価中…`;
+      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; });
+    } else {
+      // 段階 1: 各隅を単独で評価（もう一方の隅は現在の選択、未選択なら空）
+      const stage1 = [
+        ...tl.map((a) => ({ ...base, TL: a, BR: $('#fix-br').checked ? placement.BR : null })),
+        ...br.map((b) => ({ ...base, TL: $('#fix-tl').checked ? placement.TL : null, BR: b })),
+      ];
+      const total = stage1.length + K * K;
+      const r1 = await evaluateMany(stage1, (d) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${stage1.length}`; });
+      const top = (key, list) => {
+        const scored = r1.filter((r) => list.some((p) => p === r.pl[key]));
+        scored.sort((x, y) => y.winrateWhite - x.winrateWhite);
+        return scored.slice(0, K).map((r) => r.pl[key]);
+      };
+      const topTL = top('TL', tl), topBR = top('BR', br);
+      const pls = [];
+      for (const a of topTL) for (const b of topBR) pls.push({ ...base, TL: a, BR: b });
+      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; });
+    }
+    results.sort((a, b) => b.winrateWhite - a.winrateWhite || matchupScore(b.pl) - matchupScore(a.pl));
+    renderResults(results);
+    info.textContent = `${cancelOpt ? '中止: ' : ''}${results.length} 通り評価（${((performance.now() - t0) / 1000).toFixed(1)} 秒）`;
+    bar.style.width = '100%';
+  } catch (e) {
+    info.textContent = 'エラー: ' + e.message;
+  } finally {
+    $('#btn-optimize').disabled = false; $('#btn-cancel').disabled = true;
+  }
+}
+function placementText(p) {
+  if (!p) return '<span class="muted">（なし）</span>';
+  const c = cardById(p.id);
+  return `<span class="attr ${c.attr}">${c.attr}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}`;
+}
+let lastResults = [];
+function renderResults(results) {
+  lastResults = results;
+  const tb = $('#opt-results tbody');
+  tb.innerHTML = results.slice(0, 50).map((r, i) => {
+    const m = matchupScore(r.pl);
+    return `<tr class="clickable" data-i="${i}"><td>${i + 1}</td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
+      <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td>
+      <td>${placementText(r.pl.TL)}</td><td>${placementText(r.pl.BR)}</td>
+      <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">有効な組み合わせがありませんでした</td></tr>';
+}
+$('#opt-results').addEventListener('click', (ev) => {
+  const tr = ev.target.closest('tr[data-i]'); if (!tr) return;
+  const r = lastResults[+tr.dataset.i];
+  placement.TL = r.pl.TL; placement.BR = r.pl.BR;
+  store.set('placement', placement);
+  syncCornerInputs(); renderAll();
+  setEval(r);
+});
+
+// ---------------------------------------------------------------------------
+// カード一覧・編集
+// ---------------------------------------------------------------------------
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function renderCardTable() {
+  const q = $('#card-search').value.trim(), slot = $('#card-slot-filter').value;
+  const list = cards.filter((c) => (!q || c.name.includes(q)) && (!slot || c.slot === slot));
+  $('#card-table tbody').innerHTML = list.map((c) => `<tr>
+      <td><input type="checkbox" data-own="${c.id}" ${isOwned(c) ? 'checked' : ''}></td>
+      <td>${esc(c.name)}${c.retired ? ' <span class="muted">（記事から削除）</span>' : ''}${c.manual ? ' <span class="muted">（手動編集）</span>' : ''}</td>
+      <td>${c.attr ? `<span class="attr ${c.attr}">${c.attr}</span>` : '<span class="badc">?</span>'}</td>
+      <td>${c.slot || '<span class="badc">?</span>'}</td>
+      <td>${c.moves.length || '<span class="badc">未入力</span>'}</td>
+      <td><button data-edit="${c.id}">編集</button></td></tr>`).join('');
+}
+$('#card-table').addEventListener('change', (ev) => {
+  const id = ev.target.dataset.own; if (!id) return;
+  if (ev.target.checked) notOwned.delete(id); else notOwned.add(id);
+  store.set('notOwned', [...notOwned]);
+  renderCorners();
+});
+$('#card-table').addEventListener('click', (ev) => { const id = ev.target.dataset.edit; if (id) openEditor(cardById(id)); });
+$('#card-search').oninput = renderCardTable;
+$('#card-slot-filter').onchange = renderCardTable;
+$('#btn-all-owned').onclick = () => { notOwned.clear(); store.set('notOwned', []); renderCardTable(); renderCorners(); };
+$('#btn-none-owned').onclick = () => { notOwned = new Set(cards.map((c) => c.id)); store.set('notOwned', [...notOwned]); renderCardTable(); renderCorners(); };
+
+let editing = null, editMoves = [];
+function parseSgfMoves(text) {
+  const out = [];
+  const re = /(?<![A-Z])(AB|AW|B|W)((?:\s*\[[a-s]{0,2}\])+)/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const color = m[1].slice(-1);
+    for (const v of m[2].match(/\[([a-s]{0,2})\]/g)) { const s = v.slice(1, -1); if (s.length === 2) out.push([color, s]); }
+  }
+  return out;
+}
+const movesToSgf = (moves) => moves.map(([c, v]) => `;${c}[${v}]`).join('');
+function renderEditor() {
+  const { board, order } = playMoves(editMoves.map(([c, v]) => [c, ...sgfToXY(v)]));
+  const list = [];
+  board.forEach((c, i) => { if (c) list.push({ c, x: i % N, y: Math.floor(i / N), n: order[i] }); });
+  drawBoard($('#edit-board'), list, { numbers: true });
+  $('#edit-moves').value = movesToSgf(editMoves);
+}
+function openEditor(card) {
+  editing = card;
+  editMoves = card ? card.moves.map((m) => [...m]) : [];
+  $('#edit-name').value = card?.name || '';
+  $('#edit-attr').value = card?.attr || '地';
+  $('#edit-slot').value = card?.slot || 'A';
+  $('#edit-color').value = editMoves.length ? other(editMoves[editMoves.length - 1][0]) : 'B';
+  $('#edit-delete').style.visibility = card ? 'visible' : 'hidden';
+  $('#edit-msg').textContent = card?.retired ? 'このカードは最新の記事に見つからなかったため、選択肢から外れています。保存すると再び有効になります。' : '';
+  renderEditor();
+  $('#card-dialog').showModal();
+}
+$('#edit-board').addEventListener('click', (ev) => {
+  const p = svgPoint($('#edit-board'), ev); if (!p) return;
+  const color = $('#edit-color').value;
+  editMoves.push([color, xyToSgf(...p)]);
+  if ($('#edit-alternate').checked) $('#edit-color').value = other(color);
+  renderEditor();
+});
+$('#edit-undo').onclick = () => { const m = editMoves.pop(); if (m && $('#edit-alternate').checked) $('#edit-color').value = m[0]; renderEditor(); };
+$('#edit-clear').onclick = () => { editMoves = []; $('#edit-color').value = 'B'; renderEditor(); };
+$('#edit-apply-text').onclick = () => { editMoves = parseSgfMoves($('#edit-moves').value); renderEditor(); };
+$('#btn-new-card').onclick = () => openEditor(null);
+$('#edit-delete').onclick = async () => {
+  if (!editing || !confirm(`「${editing.name}」を削除しますか？（次回の更新で記事にあれば再追加されます）`)) return;
+  cards = cards.filter((c) => c !== editing);
+  $('#card-dialog').close('cancel');
+  await saveCards();
+};
+$('#card-dialog').addEventListener('close', async () => {
+  if ($('#card-dialog').returnValue !== 'save') return;
+  const parsed = parseSgfMoves($('#edit-moves').value);
+  if (JSON.stringify(parsed) !== JSON.stringify(editMoves)) editMoves = parsed;
+  const data = { name: $('#edit-name').value.trim(), attr: $('#edit-attr').value, slot: $('#edit-slot').value, moves: editMoves, manual: true };
+  if (editing) { Object.assign(editing, data); delete editing.retired; }
+  else cards.push({ id: 'm' + Date.now().toString(36), ...data });
+  try { await saveCards(); } catch (e) { alert('保存に失敗しました: ' + e.message); }
+});
+
+async function updateCards(html) {
+  const btn = $('#btn-update-cards'), msg = $('#cards-msg');
+  btn.disabled = true;
+  msg.textContent = 'カードリストを取得中…';
+  try {
+    const r = await api('POST', '/api/cards/update', { url: $('#source-url').value.trim(), html });
+    const lines = [`${r.count} 枚のカードを取得しました。`];
+    if (r.added.length) lines.push(`追加: ${r.added.join('、')}`);
+    if (r.updated.length) lines.push(`更新: ${r.updated.join('、')}`);
+    if (r.removed.length) lines.push(`記事から消えたカード（退役扱い）: ${r.removed.join('、')}`);
+    if (r.warnings.length) lines.push('注意:\n' + r.warnings.map((w) => '・' + w).join('\n'));
+    msg.textContent = lines.join('\n');
+    await loadCards();
+  } catch (e) {
+    msg.textContent = e.message + (e.data?.warnings?.length ? '\n' + e.data.warnings.join('\n') : '') +
+      '\n\n「ページ貼り付けで更新」から記事の内容を直接貼り付けることもできます。';
+  } finally {
+    btn.disabled = false;
+    showTab('cards');
+  }
+}
+$('#btn-update-cards').onclick = () => updateCards();
+$('#btn-paste-html').onclick = () => { $('#paste-html').value = ''; $('#paste-dialog').showModal(); };
+$('#paste-dialog').addEventListener('close', () => {
+  if ($('#paste-dialog').returnValue === 'ok' && $('#paste-html').value.trim()) updateCards($('#paste-html').value);
+});
+$('#btn-export').onclick = () => {
+  const blob = new Blob([JSON.stringify({ cards, notOwned: [...notOwned] }, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'igosil-cards.json'; a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('#btn-import').onclick = () => $('#import-file').click();
+$('#import-file').onchange = async (ev) => {
+  const f = ev.target.files[0]; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (!Array.isArray(data.cards)) throw new Error('cards がありません');
+    cards = data.cards;
+    if (Array.isArray(data.notOwned)) { notOwned = new Set(data.notOwned); store.set('notOwned', data.notOwned); }
+    await saveCards();
+    $('#cards-msg').textContent = `${cards.length} 枚のカードを読み込みました。`;
+  } catch (e) { alert('読み込みに失敗しました: ' + e.message); }
+  ev.target.value = '';
+};
+
+// ---------------------------------------------------------------------------
+// その他
+// ---------------------------------------------------------------------------
+function showTab(name) {
+  $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  $$('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
+}
+$$('.tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+$('#btn-eval').onclick = evaluateCurrent;
+$('#show-numbers').onchange = renderAll;
+$('#btn-optimize').onclick = optimize;
+$('#btn-cancel').onclick = () => { cancelOpt = true; };
+$('#btn-attr-advantage').onclick = () => {
+  const opp = ['TR', 'BL'].map((k) => placement[k] && cardById(placement[k].id)?.attr).filter(Boolean);
+  if (!opp.length) { alert('相手のカードが未設定です'); return; }
+  // 相手のどちらの属性にも不利にならない属性のうち、少なくとも 1 つに有利なもの
+  const good = ['地', '宙', '海'].filter((a) => opp.some((o) => relation(a, o) > 0) && !opp.some((o) => relation(a, o) < 0));
+  const fallback = ['地', '宙', '海'].filter((a) => !opp.some((o) => relation(a, o) < 0));
+  const use = good.length ? good : fallback.length ? fallback : ['地', '宙', '海'];
+  $$('.attr-filter').forEach((x) => (x.checked = use.includes(x.value)));
+};
+
+// 設定の保存・復元
+const SETTINGS = ['visits', 'komi', 'rules', 'next-player', 'owner-colors', 'batch', 'source-url', 'search-mode', 'top-k', 'owned-only', 'try-flip', 'auto-eval'];
+const saved = store.get('settings', {});
+for (const id of SETTINGS) {
+  const el = document.getElementById(id);
+  if (id in saved) { if (el.type === 'checkbox') el.checked = saved[id]; else el.value = saved[id]; }
+  el.addEventListener('change', () => {
+    saved[id] = el.type === 'checkbox' ? el.checked : el.value;
+    store.set('settings', saved);
+    if (id === 'owner-colors') onPlacementChange();
+    else if (['komi', 'rules', 'next-player', 'visits'].includes(id) && $('#auto-eval').checked) evaluateCurrent();
+  });
+}
+
+refreshStatus();
+loadCards().then(() => { if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
+  .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });
+</script>
+</body>
+</html>
