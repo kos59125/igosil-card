@@ -91,6 +91,11 @@ class KataGoEngine:
         self.error = None
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
+        # KataGo はモデルの読み込みが終わってから標準入力を読み始めるので、
+        # この問い合わせに応答が返ってきた時点を「準備完了」とみなす
+        # (logToStderr = false の設定では "ready" のログが標準エラーに出ないため)
+        self.proc.stdin.write(json.dumps({"id": "startup-probe", "action": "query_version"}) + "\n")
+        self.proc.stdin.flush()
 
     def _read_stderr(self):
         for line in self.proc.stderr:
@@ -112,6 +117,8 @@ class KataGoEngine:
             except ValueError:
                 log("katago(stdout):", line)
                 continue
+            if not self.ready.is_set():
+                log("KataGo の準備ができました", resp.get("version", ""))
             self.ready.set()
             qid = resp.get("id")
             with self.lock:
@@ -129,9 +136,10 @@ class KataGoEngine:
 
     def status(self):
         if self.proc.poll() is not None:
-            return {"engine": self.name, "ok": False, "message": self.error or "KataGo が起動していません"}
-        return {"engine": self.name, "ok": True,
-                "message": "準備完了" if self.ready.is_set() else "起動中 (モデル読み込み中)…"}
+            return {"engine": self.name, "ok": False, "ready": False, "message": self.error or "KataGo が起動していません"}
+        ready = self.ready.is_set()
+        return {"engine": self.name, "ok": True, "ready": ready,
+                "message": "準備完了" if ready else "起動中 (モデル読み込み中)…"}
 
     def analyze(self, positions, params, on_result=None, timeout=600):
         """positions: [{"stones": [[color, x, y], ...], "komi"?: float}] → [{"winrateWhite", "scoreLeadWhite", "visits"} | {"error"}]
@@ -225,7 +233,7 @@ class MockEngine:
         self.delay = delay  # 1 局面あたりの疑似的な解析時間 (秒)
 
     def status(self):
-        return {"engine": self.name, "ok": True, "message": "モックエンジン (勝率は疑似値です)"}
+        return {"engine": self.name, "ok": True, "ready": True, "message": "モックエンジン (勝率は疑似値です)"}
 
     def analyze(self, positions, params, on_result=None, timeout=0):
         size = params["boardSize"]
@@ -768,7 +776,7 @@ class Handler(SimpleHTTPRequestHandler):
             "komi": float(body.get("komi", 6.5)),
             "rules": str(body.get("rules", "japanese")),
             "nextPlayer": "W" if body.get("nextPlayer") == "W" else "B",
-            "visits": max(1, min(10000, int(body.get("visits", 100)))),
+            "visits": max(1, min(10000, int(body.get("visits", 1)))),
         }
         positions = body.get("positions", [])
         if not body.get("stream"):
