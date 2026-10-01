@@ -11,7 +11,8 @@
 //  2. 自分の組（A カード × B カード × 向き）をバッグに入れ、重み s(A) × s(B) とする。
 //     向きは「両方反転なし」と「A のみ反転」の 2 通り（両方反転は相手の配置次第で同義、B のみ反転は A のみ反転と同義）
 //  3. バッグから重みつきでサンプリングし、相手の応手を全探索して最悪ケースの勝率 V を求める
-//  4. s(A) = max(s(A), V)、s(B) = max(s(B), V) としてバッグの重みを更新し、その組をバッグから取り除く
+//  4. s(A) = min(s(A), V)、s(B) = min(s(B), V) としてバッグの重みを更新し、その組をバッグから取り除く
+//     （悪い結果が出たカードを含む組は後回しになる。未評価のカードは 50% のまま）
 //  5. バッグが空になるまで 3 に戻る（中止すれば評価済みの組で暫定の答えを出す。再実行で続きから）
 //
 // 3 枚 + 3 枚の選択: A・B それぞれ別カード 3 枚を選び、9 組の V の平均が最大になるものを厳密に求める。
@@ -41,7 +42,7 @@
       <label><input type="checkbox" id="def-flip" checked> 自分のカードの向き（反転）も探索</label>
     </div>
     <div class="row muted">相手の応手は、所持に関係なく全カード・両方の向きを全探索します（防御側と衝突するカード・向きは除外）。
-      自分の組は、カードの勝率（最初は 50%、評価した組の最悪ケース勝率で更新）の積で重みづけして、有望な組から順に評価します。</div>
+      自分の組は、カードの勝率（最初は 50%、評価した組の最悪ケース勝率が下回ればその値に更新）の積で重みづけして、有望な組から順に評価します。</div>
     <div class="row muted" id="def-estimate"></div>
     <div class="row">
       <button id="def-run" class="primary">最適な防御を探す</button>
@@ -394,8 +395,8 @@
       cells.set(cellKey(cell.a, cell.b), cell);
       if (cell.v != null) {
         insertPair(cell, animate);
-        score.set(cell.a.id, Math.max(score.get(cell.a.id), cell.v));
-        score.set(cell.b.id, Math.max(score.get(cell.b.id), cell.v));
+        score.set(cell.a.id, Math.min(score.get(cell.a.id), cell.v));
+        score.set(cell.b.id, Math.min(score.get(cell.b.id), cell.v));
       }
     };
     if (saved) {
