@@ -478,6 +478,13 @@ async function refreshStatus() {
 // ---------------------------------------------------------------------------
 // 盤面と隅の UI
 // ---------------------------------------------------------------------------
+/** 定石グループの表示名。「カニ定石（高目）」→「カニ（高目）」 */
+function groupName(c) {
+  if (!c.group) return 'その他';
+  return c.group.replace(/定石(?=（|$)/, '').trim();
+}
+/** 短い表示名。「カニ定石（高目）」→「カニ」 */
+function groupShort(c) { return groupName(c).replace(/（.*$/, ''); }
 function cardLabel(c) { return `${c.name}${c.moves.length ? '' : '（手順未入力）'}`; }
 
 function renderCorners() {
@@ -488,10 +495,14 @@ function renderCorners() {
     const div = document.createElement('div');
     div.className = 'corner' + (c.mine ? ' mine' : '');
     const opts = activeCards().filter((x) => x.slot === c.slot);
-    const groups = ['地', '宙', '海', ''].map((a) => {
-      const list = opts.filter((x) => (x.attr || '') === a);
-      if (!list.length) return '';
-      return `<optgroup label="${a || '属性不明'}">${list.map((x) => `<option value="${x.id}">${esc(cardLabel(x))}${c.mine && !isOwned(x) ? ' ※未所持' : ''}</option>`).join('')}</optgroup>`;
+    // 属性 > 定石グループ（記事の動物名）の 2 階層。select は 1 階層しか入れ子にできないため、ラベルで表現する
+    const groups = ['地', '宙', '海', ''].flatMap((a) => {
+      const inAttr = opts.filter((x) => (x.attr || '') === a);
+      const names = [...new Set(inAttr.map(groupName))];
+      return names.map((g) => {
+        const list = inAttr.filter((x) => groupName(x) === g);
+        return `<optgroup label="${esc(`${a || '属性不明'} > ${g}`)}">${list.map((x) => `<option value="${x.id}">${esc(cardLabel(x))}${c.mine && !isOwned(x) ? ' ※未所持' : ''}</option>`).join('')}</optgroup>`;
+      });
     }).join('');
     div.innerHTML = `<div class="title"><span>${c.label}（${c.mine ? '自分・白' : '相手・黒'}）配置 ${c.slot}</span><span class="attr-badge"></span></div>
       <select data-corner="${key}"><option value="">（なし）</option>${groups}</select>
@@ -561,7 +572,7 @@ function updateBadges() {
   for (const key of CORNER_ORDER) {
     const badge = $(`#corners select[data-corner="${key}"]`)?.closest('.corner').querySelector('.attr-badge');
     const card = placement[key] && cardById(placement[key].id);
-    if (badge) badge.innerHTML = card?.attr ? `<span class="attr ${card.attr}">${card.attr}</span>` : '';
+    if (badge) badge.innerHTML = card ? `${card.attr ? `<span class="attr ${card.attr}">${card.attr}</span>` : ''} ${esc(groupShort(card))}` : '';
   }
 }
 function syncCornerInputs() {
@@ -730,7 +741,7 @@ async function optimize() {
 function placementText(p) {
   if (!p) return '<span class="muted">（なし）</span>';
   const c = cardById(p.id);
-  return `<span class="attr ${c.attr}">${c.attr}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}`;
+  return `<span class="attr ${c.attr}">${c.attr}</span> <span class="muted">${esc(groupShort(c))}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}`;
 }
 let lastResults = [];
 function renderResults(results) {
@@ -768,7 +779,7 @@ function renderCardTable() {
   const list = cards.filter((c) => (!q || c.name.includes(q) || (c.group || '').includes(q)) && (!slot || c.slot === slot));
   $('#card-table tbody').innerHTML = list.map((c) => `<tr>
       <td><input type="checkbox" data-own="${c.id}" ${isOwned(c) ? 'checked' : ''}></td>
-      <td>${esc(c.name)}${c.group ? `<div class="muted">${esc(c.group.replace(/（.*$/, ''))}</div>` : ''}${c.retired ? ' <span class="muted">（記事から削除）</span>' : ''}${c.manual ? ' <span class="muted">（手動編集）</span>' : ''}</td>
+      <td>${esc(c.name)}${c.group ? `<div class="muted">${esc(groupName(c))}</div>` : ''}${c.retired ? ' <span class="muted">（記事から削除）</span>' : ''}${c.manual ? ' <span class="muted">（手動編集）</span>' : ''}</td>
       <td>${c.attr ? `<span class="attr ${c.attr}">${c.attr}</span>` : '<span class="badc">?</span>'}</td>
       <td>${c.slot || '<span class="badc">?</span>'}</td>
       <td>${c.moves.length || '<span class="badc">未入力</span>'}${prisonerText(c)}</td>
