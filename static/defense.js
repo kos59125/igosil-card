@@ -54,22 +54,30 @@
     <details open style="margin-top:6px"><summary class="muted">評価ログ</summary>
       <div class="msg" id="def-log" style="font-family:ui-monospace,Consolas,monospace;max-height:180px"></div></details>
     <div id="def-context"></div>
-    <div id="def-best"></div>
-    <details id="def-pairs-wrap" style="margin-top:8px" open><summary class="muted" id="def-pairs-summary">各組の評価（相手の最善応手に対する黒の勝率）</summary>
+    <div id="def-best">
+      <h3 id="def-sets-title">採用する 6 枚（右上 A 3 枚 + 左下 B 3 枚）の候補</h3>
+      <div class="muted" id="def-sets-note"></div>
+      <div class="scroll"><table id="def-sets"><thead><tr><th>#</th><th>期待勝率（黒）</th><th>右上 (A) 3 枚</th><th>左下 (B) 3 枚</th><th>最悪の組</th></tr></thead><tbody></tbody></table></div>
+      <div id="def-detail"></div>
+    </div>
+    <details id="def-pairs-wrap" style="margin-top:8px"><summary class="muted" id="def-pairs-summary">参考: 各組の評価（相手の最善応手に対する黒の勝率）</summary>
       <div class="scroll"><table id="def-pairs"><thead><tr><th>#</th><th>黒勝率</th><th>右上 (A)</th><th>左下 (B)</th><th>相手の最善応手（左上 / 右下）</th></tr></thead><tbody></tbody></table></div>
       <div class="muted">行をクリックすると、その組と相手の最善応手を盤面に反映します。</div>
     </details>`;
   const style = document.createElement('style');
   style.textContent = `
     #def-context { font-size: 12px; margin-top: 8px; padding: 6px 8px; border-left: 3px solid var(--accent-2); background: var(--bg); border-radius: 0 6px 6px 0; }
-    #def-context:empty, #def-best:empty { display: none; }
+    #def-context:empty, #def-best.empty { display: none; }
+    #def-sets td { vertical-align: top; }
+    #def-sets tr.active { background: var(--flash); }
+    #def-sets .cards div { white-space: nowrap; }
+    #def-detail { margin-top: 10px; }
     #def-best { margin-top: 10px; padding: 10px; border: 1px solid var(--accent-2); border-radius: 8px; }
     #def-best.provisional { border-style: dashed; }
     #def-best h3 { margin: 0 0 6px; font-size: 14px; }
     .def-matrix td, .def-matrix th { text-align: center; }
     .def-matrix td.cell { cursor: pointer; font-weight: 600; }
-    .def-matrix td.cell:hover { outline: 2px solid var(--accent-2); }
-    .def-alt { cursor: pointer; } .def-alt:hover { background: var(--bg); } .def-alt.active { background: var(--flash); }`;
+    .def-matrix td.cell:hover { outline: 2px solid var(--accent-2); }`;
   document.head.appendChild(style);
 
   const st = { run: 0, running: false, cancel: false, result: null, sets: [], shownSet: 0, provisional: false };
@@ -173,7 +181,7 @@
   // ---- 各組の表（ライブ挿入） -----------------------------------------------------
   let pairRows = [];
   const PAIR_LIMIT = 200;
-  function resetPairs() { pairRows = []; $('#def-pairs tbody').innerHTML = ''; $('#def-pairs-summary').textContent = '各組の評価（相手の最善応手に対する黒の勝率）'; }
+  function resetPairs() { pairRows = []; $('#def-pairs tbody').innerHTML = ''; $('#def-pairs-summary').textContent = '参考: 各組の評価（相手の最善応手に対する黒の勝率）'; }
   function pairRow(cell) {
     const tr = document.createElement('tr');
     tr.className = 'clickable';
@@ -265,20 +273,53 @@
     return { rowsA, colsB, M, lookup };
   }
 
+  const setKey = (set, rowsA, colsB) =>
+    [...set.rows.map((r) => `${rowsA[r].id}:${rowsA[r].flip ? 1 : 0}`).sort(), '|', ...set.cols.map((c) => `${colsB[c].id}:${colsB[c].flip ? 1 : 0}`).sort()].join(',');
+  let shownKeys = new Set();
+
+  /** 6 枚の候補の表（主な出力）。新しく上位に入った組み合わせは強調表示する */
   function renderBest() {
     const box = $('#def-best');
     const r = st.result;
-    if (!r) { box.innerHTML = ''; return; }
-    box.classList.toggle('provisional', st.provisional);
+    box.classList.toggle('empty', !r);
+    box.classList.toggle('provisional', !!r && st.provisional);
+    if (!r) { $('#def-sets tbody').innerHTML = ''; $('#def-detail').innerHTML = ''; shownKeys = new Set(); return; }
+    const { rowsA, colsB, M } = r;
     const sets = st.sets;
-    if (!sets.length) {
-      box.innerHTML = st.provisional
-        ? '<div class="muted">暫定の答え: まだ A・B それぞれ 3 枚の組がそろっていません（評価が進むと表示されます）。</div>'
-        : `<div class="badc">A・B それぞれ ${SET_SIZE} 枚（別のカード）を選べる組み合わせがありませんでした。候補を増やしてください。</div>`;
-      return;
-    }
-    const { rowsA, colsB, M, lookup } = r;
-    const set = sets[st.shownSet] || sets[0];
+    $('#def-sets-title').textContent = st.provisional
+      ? `採用する 6 枚の候補（暫定: 評価済みの ${r.evaluated} / ${r.items} 組から）`
+      : '採用する 6 枚（右上 A 3 枚 + 左下 B 3 枚）の候補';
+    $('#def-sets-note').textContent = sets.length
+      ? '期待勝率 = 9 通りの組（A・B から 1 枚ずつ、各 1/9）それぞれで相手が最善の応手をしたときの黒の勝率の平均。行をクリックすると内訳を表示します。'
+      : (st.provisional ? 'まだ A・B それぞれ 3 枚の組がそろっていません（評価が進むと表示されます）。'
+        : `A・B それぞれ ${SET_SIZE} 枚（別のカード）を選べる組み合わせがありませんでした。候補を増やしてください。`);
+    const keys = new Set();
+    const tb = $('#def-sets tbody');
+    tb.innerHTML = '';
+    sets.forEach((set, i) => {
+      const key = setKey(set, rowsA, colsB);
+      keys.add(key);
+      let worst = Infinity;
+      for (const ri of set.rows) for (const ci of set.cols) worst = Math.min(worst, M[ri][ci]);
+      const tr = document.createElement('tr');
+      tr.className = 'clickable' + (i === st.shownSet ? ' active' : '');
+      tr.innerHTML = `<td>${i + 1}</td><td><b>${pct(set.ev)}</b></td>
+        <td class="cards">${set.rows.map((ri) => `<div>${cardHtml(rowsA[ri])}</div>`).join('')}</td>
+        <td class="cards">${set.cols.map((ci) => `<div>${cardHtml(colsB[ci])}</div>`).join('')}</td>
+        <td>${pct(worst)}</td>`;
+      if (!shownKeys.has(key)) { tr.classList.add('row-new'); tr.addEventListener('animationend', () => tr.classList.remove('row-new'), { once: true }); }
+      tr.onclick = () => { st.shownSet = i; renderBest(); };
+      tb.appendChild(tr);
+    });
+    shownKeys = keys;
+    renderDetail();
+  }
+
+  /** 選んだ 6 枚の内訳（3 × 3 の各組と相手の最善応手） */
+  function renderDetail() {
+    const { rowsA, colsB, M, lookup } = st.result;
+    const set = st.sets[st.shownSet];
+    if (!set) { $('#def-detail').innerHTML = ''; return; }
     const head = set.cols.map((c) => `<th>${cardHtml(colsB[c])}</th>`).join('');
     const body = set.rows.map((ri) => `<tr><th style="text-align:left">${cardHtml(rowsA[ri])}</th>${set.cols.map((ci) => {
       const cell = lookup(rowsA[ri], colsB[ci]);
@@ -287,30 +328,25 @@
         (same ? `\n（同義の向き 右上 ${cardTxt(cell.a)} / 左下 ${cardTxt(cell.b)} で評価）` : '') : '';
       return `<td class="cell" data-r="${ri}" data-c="${ci}" title="${esc(title)}">${pct(M[ri][ci])}</td>`;
     }).join('')}</tr>`).join('');
-    const alts = sets.map((s, i) => `<tr class="def-alt${s === set ? ' active' : ''}" data-i="${i}"><td>${i + 1}</td><td><b>${pct(s.ev)}</b></td>
-      <td>${s.rows.map((ri) => esc(cardById(rowsA[ri].id).name) + (rowsA[ri].flip ? '（反転）' : '')).join('、')}</td>
-      <td>${s.cols.map((ci) => esc(cardById(colsB[ci].id).name) + (colsB[ci].flip ? '（反転）' : '')).join('、')}</td></tr>`).join('');
-    const title = st.provisional ? `暫定の最適な防御（評価済みの ${r.evaluated} / ${r.items} 組から）` : (st.shownSet === 0 ? '最適な防御' : `${st.shownSet + 1} 位の防御`);
-    box.innerHTML = `
-      <h3>${title}: 期待勝率（黒） ${pct(set.ev)}</h3>
-      <div class="muted">行 = 右上 (A) に登録する 3 枚、列 = 左下 (B) に登録する 3 枚。各マスは、その組が選ばれたときに相手が最善の応手をした場合の黒の勝率（各 1/9）。マスをクリックすると盤面に反映します。</div>
-      <table class="def-matrix" style="margin-top:6px"><thead><tr><th>右上 (A) ＼ 左下 (B)</th>${head}</tr></thead><tbody>${body}</tbody></table>
-      <details style="margin-top:8px"><summary class="muted">上位 ${sets.length} 件の組み合わせ（クリックで表示）</summary>
-        <table><thead><tr><th>#</th><th>期待勝率</th><th>右上 (A)</th><th>左下 (B)</th></tr></thead><tbody>${alts}</tbody></table></details>`;
-    $$('#def-best td.cell').forEach((td) => (td.onclick = () => {
+    $('#def-detail').innerHTML = `
+      <div class="muted">${st.shownSet + 1} 位の内訳: 行 = 右上 (A)、列 = 左下 (B)。各マスはその組が選ばれたときの黒の勝率（相手が最善の応手をした場合）。
+        マスにカーソルを合わせると相手の最善応手、クリックすると盤面に反映します。</div>
+      <table class="def-matrix" style="margin-top:6px"><thead><tr><th>右上 (A) ＼ 左下 (B)</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    $$('#def-detail td.cell').forEach((td) => (td.onclick = () => {
       const cell = lookup(rowsA[+td.dataset.r], colsB[+td.dataset.c]);
       if (cell) applyCell(cell);  // 同義の向きのときは、評価した向きで盤面に反映する
     }));
-    $$('#def-best .def-alt').forEach((tr) => (tr.onclick = () => { st.shownSet = +tr.dataset.i; renderBest(); }));
   }
 
   /** 評価済みの組から 3 + 3 を選んで表示する */
   function computeSets(cand, cells, { provisional, items }) {
     const t = performance.now();
     const m = buildMatrix(cand, cells);
+    // 内訳を表示中の組み合わせは、順位が変わっても選んだままにする
+    const prev = st.result && st.sets[st.shownSet] ? setKey(st.sets[st.shownSet], st.result.rowsA, st.result.colsB) : null;
     st.result = { ...m, evaluated: cells.size, items };
-    st.sets = bestSets(m.rowsA, m.colsB, m.M);
-    st.shownSet = 0;
+    st.sets = bestSets(m.rowsA, m.colsB, m.M, 20);
+    st.shownSet = Math.max(0, prev ? st.sets.findIndex((x) => setKey(x, m.rowsA, m.colsB) === prev) : 0);
     st.provisional = provisional;
     renderBest();
     return performance.now() - t;
@@ -336,7 +372,7 @@
     $('#def-log').textContent = '';
     $('#def-context').innerHTML = '';
     st.result = null; st.sets = [];
-    $('#def-best').innerHTML = '';
+    renderBest();
     $('#def-info').textContent = '';
     $('#def-progress').style.width = '0';
     $('#def-run').disabled = false; $('#def-cancel').disabled = true;
@@ -497,7 +533,7 @@
       if (L.pairsEvaluated) log(`${complete ? '完了' : '中止'}: ${L.pairsDone} / ${L.items} 組、今回 ${L.positionsDone.toLocaleString()} 局面、${elapsed}${errors ? `、エラー ${errors} 件` : ''}`, run);
       if (!complete) log('同じ条件で再実行すると、続きから評価します。', run);
       $('#def-progress').style.width = (100 * L.pairsDone / L.items) + '%';
-      $('#def-pairs-summary').textContent = `各組の評価（相手の最善応手に対する黒の勝率、${cells.size} / ${L.items} 組）`;
+      $('#def-pairs-summary').textContent = `参考: 各組の評価（相手の最善応手に対する黒の勝率、${cells.size} / ${L.items} 組）`;
       const ms = computeSets(cand, cells, { provisional: !complete, items: items.length });
       log(`組み合わせの選択: 評価済みの ${cells.size} 組から A・B 3 枚ずつを厳密に探索（${fmtSec(ms / 1000)}）`, run);
       if (st.sets.length) {
@@ -517,6 +553,7 @@
     }
   }
 
+  renderBest();
   window.defense = { bestSets, buildMatrix, clear: clearDefense };  // テスト・デバッグ用
   $('#def-run').onclick = () => runDefense();
   $('#def-cancel').onclick = () => { st.cancel = true; abortAnalyze(); };
