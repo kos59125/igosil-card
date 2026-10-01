@@ -320,11 +320,22 @@ function homeCorner(card) {
   const cx = sx / card.moves.length, cy = sy / card.moves.length;
   return { x: cx > (N - 1) / 2 ? 1 : cx < (N - 1) / 2 ? 0 : 1, y: cy > (N - 1) / 2 ? 1 : cy < (N - 1) / 2 ? 0 : (card.slot === 'B' ? 1 : 0) };
 }
-/** 描かれた隅 → 置く隅 への写像。flip は隅の対角線で反転（カードの「反転」） */
+/** 隅の時計回りの順番（右上 0 → 右下 1 → 左下 2 → 左上 3） */
+const cwIndex = (c) => (c.y ? (c.x ? 1 : 2) : (c.x ? 0 : 3));
+/**
+ * 描かれた隅 → 置く隅 への写像。既定の向きは盤ごと時計回りに回転して当てはめる
+ * （右上に描かれたカードなら 右下 90°、左下 180°、左上 270°）。
+ * flip（カードの「反転」）は置いた隅の対角線で折り返す。
+ */
 function mapPoint(x, y, home, target, flip) {
-  let u = home.x ? N - 1 - x : x, v = home.y ? N - 1 - y : y;
-  if (flip) [u, v] = [v, u];
-  return [target.x ? N - 1 - u : u, target.y ? N - 1 - v : v];
+  const turns = (cwIndex(target) - cwIndex(home) + 4) % 4;
+  for (let i = 0; i < turns; i++) [x, y] = [N - 1 - y, x];  // 時計回りに 90°
+  if (flip) {
+    let u = target.x ? N - 1 - x : x, v = target.y ? N - 1 - y : y;
+    [u, v] = [v, u];
+    [x, y] = [target.x ? N - 1 - u : u, target.y ? N - 1 - v : v];
+  }
+  return [x, y];
 }
 function placedCardStones(card, cornerKey, flip) {
   const meta = cardMeta[card.id];
