@@ -795,7 +795,15 @@ function candidatesFor(cornerKey) {
   });
 }
 // 評価ログ（最適化タブ）
-const fmtSec = (s) => (s >= 90 ? `${Math.floor(s / 60)} 分 ${Math.round(s % 60)} 秒` : `${s.toFixed(1)} 秒`);
+/** 秒数を「1 日 2 時間 3 分 4 秒」の形で表示する（上位 2 単位まで。1 分未満は小数 1 桁） */
+function fmtSec(s) {
+  if (!Number.isFinite(s)) return '—';
+  if (s < 60) return `${s.toFixed(1)} 秒`;
+  const t = Math.round(s);
+  const units = [['日', Math.floor(t / 86400)], ['時間', Math.floor(t / 3600) % 24], ['分', Math.floor(t / 60) % 60], ['秒', t % 60]];
+  const first = units.findIndex(([, v]) => v > 0);
+  return units.slice(first, first + 2).filter(([, v], i) => i === 0 || v > 0).map(([u, v]) => `${v} ${u}`).join(' ');
+}
 function logOpt(text) {
   const el = $('#opt-log');
   const t = new Date().toLocaleTimeString('ja-JP', { hour12: false });
@@ -1365,5 +1373,6 @@ loadCards().then(() => { if ($('#auto-eval').checked && (placement.TL || placeme
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });
 </script>
 <script src="defense.js"></script>
+<script src="setup.js"></script>
 </body>
 </html>

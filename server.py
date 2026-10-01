@@ -14,6 +14,7 @@
 """
 
 import argparse
+import collections
 import hashlib
 import html as htmllib
 import json
@@ -29,6 +30,8 @@ import unicodedata
 import urllib.request
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+import katago_setup
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(ROOT, "static")
@@ -82,7 +85,9 @@ class KataGoEngine:
             cmd += extra_args
         log("starting:", " ".join(cmd))
         self.model = os.path.basename(model)
+        self.katago, self.model_path, self.config = katago, model, config
         self.version = None  # 起動確認の応答から取得
+        self.stderr_tail = collections.deque(maxlen=20)  # 異常終了時の原因表示用
         self.proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, encoding="utf-8")
@@ -102,10 +107,14 @@ class KataGoEngine:
     def _read_stderr(self):
         for line in self.proc.stderr:
             line = line.rstrip()
+            if line:
+                self.stderr_tail.append(line)
             if "ready to begin handling requests" in line.lower() or "started, ready" in line.lower():
                 self.ready.set()
             log("katago:", line)
-        self.error = f"KataGo が終了しました (code={self.proc.poll()})"
+        code = self.proc.wait()
+        last = next((l for l in reversed(self.stderr_tail) if l.strip()), "")
+        self.error = f"KataGo が終了しました (code={code})" + (f": {last}" if last else "")
         self.ready.set()
         self._fail_all(self.error)
 
@@ -137,6 +146,14 @@ class KataGoEngine:
             waiters, self.waiters = self.waiters, {}
         for q in waiters.values():
             q.put({"error": msg})
+
+    def stop(self):
+        """KataGo を終了する（設定変更で起動し直すとき）。"""
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            self.proc.kill()
 
     def status(self):
         info = {"engine": self.name, "version": self.version, "model": self.model}
@@ -227,6 +244,42 @@ class KataGoEngine:
                 if on_result:
                     on_result(idx, results[idx])
         return results
+
+
+class NoEngine:
+    """KataGo が未設定・起動できなかったときの代わり。設定タブから導入・起動できる。"""
+
+    name = "none"
+
+    def __init__(self, message="KataGo が未設定です（「設定」タブの「KataGo の導入」から設定してください）"):
+        self.message = message
+
+    def status(self):
+        return {"engine": self.name, "version": None, "model": None, "ok": False, "ready": False,
+                "setup": True, "message": self.message}
+
+    def analyze(self, positions, params, on_result=None, timeout=0):
+        raise RuntimeError(self.message)
+
+    def stop(self):
+        pass
+
+
+def build_engine(katago, model, config):
+    """KataGo を起動する。起動できなければ理由つきの NoEngine を返す。"""
+    if not model:
+        return NoEngine()
+    if not os.path.exists(model):
+        return NoEngine(f"モデルファイルが見つかりません: {model}")
+    if os.sep in katago or (os.altsep and os.altsep in katago):
+        if not os.path.exists(katago):
+            return NoEngine(f"KataGo の実行ファイルが見つかりません: {katago}")
+    elif not shutil.which(katago):
+        return NoEngine(f"KataGo の実行ファイル「{katago}」が PATH に見つかりません")
+    try:
+        return KataGoEngine(katago, model, config)
+    except OSError as e:
+        return NoEngine(f"KataGo を起動できませんでした: {e}")
 
 
 class MockEngine:
@@ -720,6 +773,22 @@ def fetch_page(url):
 class Handler(SimpleHTTPRequestHandler):
     engine = None
     cards_lock = threading.Lock()
+    engine_lock = threading.Lock()
+    engine_args = {"katago": None, "model": None, "config": None, "source": None}
+    downloads = katago_setup.Downloads()
+
+    @classmethod
+    def switch_engine(cls, katago, model, config, source):
+        """KataGo を（再）起動する。局面のキャッシュはモデルが変わるので作り直す。"""
+        with cls.engine_lock:
+            old = cls.engine.engine if cls.engine else None
+            if old is not None and hasattr(old, "stop"):
+                old.stop()
+            engine = build_engine(katago, model, config)
+            cls.engine = CachedEngine(engine)
+            cls.engine_args = {"katago": katago, "model": model, "config": config, "source": source}
+            log(f"engine: {engine.name}", engine.status().get("message", ""))
+            return engine
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
@@ -746,6 +815,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/status":
             return self._json(self.engine.status())
+        if self.path.startswith("/api/katago/"):
+            try:
+                return self._katago_get(self.path[len("/api/katago/"):])
+            except Exception as e:  # noqa: BLE001
+                log("error:", repr(e))
+                return self._json({"error": str(e)}, HTTPStatus.BAD_GATEWAY)
         if self.path == "/api/cards":
             with self.cards_lock:
                 return self._json(load_cards())
@@ -771,10 +846,50 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"ok": True})
             if self.path == "/api/cards/update":
                 return self._update_cards()
+            if self.path.startswith("/api/katago/"):
+                return self._katago_post(self.path[len("/api/katago/"):])
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except Exception as e:  # noqa: BLE001 - UI にそのまま表示する
             log("error:", repr(e))
             self._json({"error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    # ---- KataGo の導入 ----
+    def _katago_get(self, what):
+        if what == "setup":
+            settings = katago_setup.load_settings()
+            return self._json({
+                "platform": katago_setup.server_platform(), "settings": settings, "current": self.engine_args,
+                "defaultConfig": os.path.join(ROOT, "analysis.cfg"), "status": self.engine.status(),
+                "jobs": self.downloads.snapshot(), "folder": katago_setup.KATAGO_DIR,
+            })
+        if what == "releases":
+            return self._json({"releases": katago_setup.list_releases()})
+        if what == "networks":
+            return self._json(katago_setup.list_networks())
+        return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def _katago_post(self, what):
+        body = self._body()
+        if what == "download":
+            try:
+                job = self.downloads.start(body.get("kind"), body.get("url", ""), body.get("name"))
+            except ValueError as e:
+                return self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+            return self._json({"job": job})
+        if what == "settings":
+            # 手動で指定したパスを保存する（空欄は変更しない）
+            data = katago_setup.save_settings(**{k: (body.get(k) or "").strip() or None for k in ("katago", "model", "config")})
+            return self._json({"settings": data})
+        if what == "start":
+            if self.engine_args.get("source") == "mock":
+                return self._json({"error": "モックエンジンで起動中です。KataGo を使うには --mock を付けずに起動し直してください。"},
+                                  HTTPStatus.CONFLICT)
+            s = katago_setup.load_settings()
+            katago = s.get("katago") or "katago"
+            config = s.get("config") or os.path.join(ROOT, "analysis.cfg")
+            engine = self.switch_engine(katago, s.get("model"), config, "settings")
+            return self._json({"status": engine.status()})
+        return self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def _analyze(self):
         body = self._body()
@@ -837,21 +952,30 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--katago", default=os.environ.get("KATAGO_PATH", "katago"), help="KataGo 実行ファイル")
-    ap.add_argument("--model", default=os.environ.get("KATAGO_MODEL"), help="KataGo のモデルファイル (.bin.gz)")
-    ap.add_argument("--config", default=os.environ.get("KATAGO_CONFIG", os.path.join(ROOT, "analysis.cfg")),
-                    help="KataGo analysis 用の設定ファイル")
+    ap.add_argument("--katago", default=os.environ.get("KATAGO_PATH"),
+                    help="KataGo 実行ファイル（省略時は画面からダウンロード・設定したもの、無ければ PATH の katago）")
+    ap.add_argument("--model", default=os.environ.get("KATAGO_MODEL"),
+                    help="KataGo のモデルファイル .bin.gz（省略時は画面からダウンロード・設定したもの）")
+    ap.add_argument("--config", default=os.environ.get("KATAGO_CONFIG"),
+                    help="KataGo analysis 用の設定ファイル（省略時は analysis.cfg）")
     ap.add_argument("--mock", action="store_true", help="KataGo を使わず疑似エンジンで起動 (UI 確認用)")
     ap.add_argument("--mock-delay", type=float, default=0.002, help="モックエンジンの 1 局面あたりの解析時間 (秒)")
     args = ap.parse_args()
 
     if args.mock:
         engine = MockEngine(args.mock_delay)
+        Handler.engine = CachedEngine(engine)
+        Handler.engine_args = {"katago": None, "model": None, "config": None, "source": "mock"}
     else:
-        if not args.model:
-            ap.error("--model (または環境変数 KATAGO_MODEL) を指定してください。UI だけ試す場合は --mock")
-        engine = KataGoEngine(args.katago, args.model, args.config)
-    Handler.engine = CachedEngine(engine)
+        # 優先順位: コマンドライン / 環境変数 > 画面で設定したもの (katago/settings.json) > PATH の katago
+        saved = katago_setup.load_settings()
+        cli = bool(args.katago or args.model)
+        katago = args.katago or saved.get("katago") or "katago"
+        model = args.model or saved.get("model")
+        config = args.config or saved.get("config") or os.path.join(ROOT, "analysis.cfg")
+        engine = Handler.switch_engine(katago, model, config, "command line" if cli else "settings")
+        if engine.name == "none":
+            log("KataGo が未設定です。ブラウザの「設定」タブの「KataGo の導入」からダウンロード・設定できます。")
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     log(f"http://{args.host}:{args.port}/ を開いてください (engine={engine.name})")
