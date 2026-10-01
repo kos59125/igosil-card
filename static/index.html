@@ -93,6 +93,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     <div class="msg" id="placement-note"></div>
     <div class="row">
       <button id="btn-eval" class="primary">勝率を計算</button>
+      <button id="btn-clear-mine" title="左上・右下（自分）のカードを外す">自分の配置をクリア</button>
+      <button id="btn-clear-all" title="4 隅すべてのカードを外す">すべてクリア</button>
       <label><input type="checkbox" id="auto-eval" checked> 変更時に自動計算</label>
       <label><input type="checkbox" id="show-numbers"> 手順番号を表示</label>
     </div>
@@ -1039,6 +1041,12 @@ function showTab(name) {
 }
 $$('.tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 $('#btn-eval').onclick = evaluateCurrent;
+function clearPlacement(keys) {
+  for (const k of keys) placement[k] = null;
+  onPlacementChange();
+}
+$('#btn-clear-mine').onclick = () => clearPlacement(['TL', 'BR']);
+$('#btn-clear-all').onclick = () => clearPlacement(CORNER_ORDER);
 $('#show-numbers').onchange = renderAll;
 $('#btn-optimize').onclick = optimize;
 // 全探索では K を使わないので隠す
