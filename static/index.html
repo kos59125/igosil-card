@@ -48,8 +48,40 @@ label { cursor: pointer; }
 .corner { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 .corner.mine { border-color: var(--accent-2); }
 .corner .title { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
-.corner select { width: 100%; margin: 4px 0; }
-.corner option:disabled { color: #9a9a9a; background: #e4e4e4; }
+/* カード選択ボックス（static/picker.js） */
+.picker-slot { margin: 4px 0; }
+.cp { position: relative; }
+.cp-box { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 30px; padding: 2px 52px 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); cursor: text; position: relative; }
+.cp.open .cp-box { border-color: var(--accent-2); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 25%, transparent); }
+.cp-input { flex: 1; min-width: 60px; border: none !important; background: transparent !important; outline: none; padding: 2px 0 !important; font: inherit; color: var(--text); }
+.cp:not(.open) .cp-input { position: absolute; opacity: 0; pointer-events: none; width: 1px; }
+.cp-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.cp-clear, .cp-caret { position: absolute; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--muted); padding: 0 4px; cursor: pointer; }
+.cp-clear { right: 22px; } .cp-caret { right: 6px; pointer-events: none; }
+.cp-chip { display: inline-flex; align-items: center; gap: 3px; padding: 0 4px 0 6px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); font-size: 12px; color: var(--text); }
+.cp-chip.attr { border-color: transparent; color: #1f2328; font-weight: 600; }
+.cp-chip-x { cursor: pointer; opacity: .7; padding: 0 2px; } .cp-chip-x:hover { opacity: 1; }
+.cp-pop { position: absolute; z-index: 20; left: 0; top: calc(100% + 2px); width: max(100%, 380px); max-width: calc(100vw - 32px); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+.cp-quick { padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 12px; display: grid; gap: 4px; }
+.cp-q { cursor: pointer; display: inline-block; }
+.cp-q.on .attr, .cp-qg.on { outline: 2px solid var(--accent-2); outline-offset: 1px; }
+.cp-qg { border: 1px solid var(--border); border-radius: 10px; padding: 0 6px; margin: 1px 2px; font-size: 12px; white-space: nowrap; }
+.cp-h2 .cp-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.corner:nth-child(even) .cp-pop { left: auto; right: 0; }
+.cp-qg:hover, .cp-q:hover .attr { filter: brightness(.95); background: var(--bg); }
+.cp-list { max-height: 320px; overflow: auto; padding: 4px 0; }
+.cp-h { display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: pointer; user-select: none; }
+.cp-h1 { font-weight: 600; } .cp-h2 { padding-left: 22px; }
+.cp-h:hover { background: var(--bg); }
+.cp-tw { width: 10px; color: var(--muted); }
+.cp-item { padding: 3px 8px 3px 44px; cursor: pointer; }
+.cp-item.cp-none { padding-left: 8px; }
+.cp-item:hover, .cp-item.active { background: var(--flash); }
+.cp-item.selected { font-weight: 600; }
+.cp-item.disabled { color: var(--muted); opacity: .55; cursor: not-allowed; background: none; }
+.cp-note { font-size: 11px; color: var(--muted); }
+.cp-muted { color: var(--muted); font-size: 12px; }
+.cp-empty { padding: 6px 8px; color: var(--muted); }
 .corner input:disabled + span, .corner label:has(input:disabled) { color: var(--muted); opacity: .6; }
 .attr { display: inline-block; min-width: 1.6em; text-align: center; border-radius: 4px; color: #1f2328; font-weight: 600; font-size: 12px; padding: 0 4px; }
 .attr.地 { background: var(--chi); } .attr.宙 { background: var(--chu); } .attr.海 { background: var(--umi); }
@@ -249,6 +281,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   </form>
 </dialog>
 
+<script src="picker.js"></script>
 <script>
 'use strict';
 const N = 19;
@@ -589,6 +622,25 @@ function groupName(c) {
 function groupShort(c) { return groupName(c).replace(/（.*$/, ''); }
 function cardLabel(c) { return `${c.name}${c.moves.length ? '' : '（手順未入力）'}`; }
 
+const cornerPickers = {};
+/** 隅 key の選択肢（開いたときに計算する。挑戦側の隅は衝突するカードをグレーアウト） */
+function cornerItems(key) {
+  const c = CORNERS[key];
+  return activeCards().filter((x) => x.slot === c.slot).map((x) => {
+    let disabled = false, title = '';
+    if (c.mine && x.moves.length) {
+      const ok = placeable(key, x.id);
+      disabled = !ok[0] && !ok[1];
+      title = disabled ? '防御側の配置と衝突するため置けません' : !ok[0] ? '反転した向きのみ置けます' : !ok[1] ? '反転しない向きのみ置けます' : '';
+    }
+    const notes = [];
+    if (!x.moves.length) notes.push('手順未入力');
+    if (isMyCorner(key) && !isOwned(x)) notes.push('未所持');
+    if (disabled) notes.push('置けません');
+    else if (title) notes.push(title.replace('置けます', ''));
+    return { id: x.id, attr: x.attr || '', group: groupShort(x), groupLabel: groupName(x), name: x.name, note: notes.join('・'), disabled, title };
+  });
+}
 function renderCorners() {
   const wrap = $('#corners');
   wrap.innerHTML = '';
@@ -596,33 +648,33 @@ function renderCorners() {
     const c = CORNERS[key];
     const div = document.createElement('div');
     div.className = 'corner' + (isMyCorner(key) ? ' mine' : '');
-    const opts = activeCards().filter((x) => x.slot === c.slot);
-    // 属性 > 定石グループ（記事の動物名）の 2 階層。select は 1 階層しか入れ子にできないため、ラベルで表現する
-    const groups = ['地', '宙', '海', ''].flatMap((a) => {
-      const inAttr = opts.filter((x) => (x.attr || '') === a);
-      const names = [...new Set(inAttr.map(groupName))];
-      return names.map((g) => {
-        const list = inAttr.filter((x) => groupName(x) === g);
-        return `<optgroup label="${esc(`${a || '属性不明'} > ${g}`)}">${list.map((x) => `<option value="${x.id}">${esc(cardLabel(x))}${isMyCorner(key) && !isOwned(x) ? ' ※未所持' : ''}</option>`).join('')}</optgroup>`;
-      });
-    }).join('');
+    div.dataset.corner = key;
     div.innerHTML = `<div class="title"><span>${c.label}（${isMyCorner(key) ? '自分' : '相手'}・${c.mine ? '白' : '黒'}）配置 ${c.slot}</span><span class="attr-badge"></span></div>
-      <select data-corner="${key}"><option value="">（なし）</option>${groups}</select>
+      <div class="picker-slot"></div>
       <label><input type="checkbox" data-flip="${key}"> 反転</label>`;
     wrap.appendChild(div);
-    const sel = div.querySelector('select'), flip = div.querySelector('input');
-    sel.value = placement[key]?.id || '';
+    const flip = div.querySelector('input');
+    const old = cornerPickers[key];
+    // 絞り込みのチップ・折りたたみの状態は、描き直しても引き継ぐ
+    const picker = new CardPicker({
+      getItems: () => cornerItems(key),
+      describe: (id) => { const x = cardById(id); return x && { attr: x.attr || '', group: groupShort(x), name: x.name }; },
+      onChange: (id) => {
+        if (!id) placement[key] = null;
+        else {
+          // 選んだ向きで置けない場合は、置けるほうの向きにする
+          const ok = c.mine ? placeable(key, id) : [true, true];
+          const f = ok[+flip.checked] ? flip.checked : !flip.checked;
+          placement[key] = { id, flip: f };
+        }
+        onPlacementChange();
+      },
+    });
+    if (old) { picker.chips = old.chips; picker.collapsed = old.collapsed; }
+    cornerPickers[key] = picker;
+    div.querySelector('.picker-slot').appendChild(picker.el);
+    picker.value = placement[key]?.id || null;
     flip.checked = !!placement[key]?.flip;
-    sel.onchange = () => {
-      if (!sel.value) placement[key] = null;
-      else {
-        // 選んだ向きで置けない場合は、置けるほうの向きにする
-        const ok = c.mine ? placeable(key, sel.value) : [true, true];
-        const f = ok[+flip.checked] ? flip.checked : !flip.checked;
-        placement[key] = { id: sel.value, flip: f };
-      }
-      onPlacementChange();
-    };
     flip.onchange = () => { if (placement[key]) placement[key].flip = flip.checked; onPlacementChange(); };
   }
   updateAvailability();
@@ -652,17 +704,11 @@ function enforcePlacementRules() {
   }
   return notes;
 }
-/** 自分の隅で置けないカード・向きをグレーアウトする */
+/** 挑戦側の隅で置けない向きの「反転」をグレーアウトする（置けないカードは選択ボックスを開いたときにグレーアウト） */
 function updateAvailability() {
   for (const key of MY_CORNERS) {
-    const sel = $(`#corners select[data-corner="${key}"]`), flip = $(`#corners input[data-flip="${key}"]`);
-    if (!sel) continue;
-    for (const o of sel.options) {
-      if (!o.value) continue;
-      const ok = placeable(key, o.value);
-      o.disabled = !ok[0] && !ok[1];
-      o.title = o.disabled ? '相手の配置と衝突するため置けません' : !ok[0] ? '反転した向きのみ置けます' : !ok[1] ? '反転しない向きのみ置けます' : '';
-    }
+    const flip = $(`#corners input[data-flip="${key}"]`);
+    if (!flip) continue;
     const p = placement[key];
     const ok = p ? placeable(key, p.id) : [true, true];
     flip.disabled = !p || !ok[+!p.flip];
@@ -672,14 +718,14 @@ function updateAvailability() {
 
 function updateBadges() {
   for (const key of CORNER_ORDER) {
-    const badge = $(`#corners select[data-corner="${key}"]`)?.closest('.corner').querySelector('.attr-badge');
+    const badge = $(`#corners .corner[data-corner="${key}"] .attr-badge`);
     const card = placement[key] && cardById(placement[key].id);
     if (badge) badge.innerHTML = card ? `${card.attr ? `<span class="attr ${card.attr}">${card.attr}</span>` : ''} ${esc(groupShort(card))}` : '';
   }
 }
 function syncCornerInputs() {
   for (const key of CORNER_ORDER) {
-    $(`#corners select[data-corner="${key}"]`).value = placement[key]?.id || '';
+    if (cornerPickers[key]) cornerPickers[key].value = placement[key]?.id || null;
     $(`#corners input[data-flip="${key}"]`).checked = !!placement[key]?.flip;
   }
 }
