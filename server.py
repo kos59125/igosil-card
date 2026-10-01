@@ -59,6 +59,16 @@ def pos_komi(pos, params):
     return max(-150.0, min(150.0, round(komi * 2) / 2))
 
 
+class _Tagged:
+    """KataGo の応答を、要求ごとの共有キューに局面番号つきで流す。"""
+
+    def __init__(self, q, idx):
+        self.q, self.idx = q, idx
+
+    def put(self, resp):
+        self.q.put((self.idx, resp))
+
+
 class KataGoEngine:
     """KataGo の analysis エンジンをサブプロセスとして常駐させる。"""
 
@@ -108,8 +118,8 @@ class KataGoEngine:
                 q = self.waiters.pop(qid, None)
             if q is not None:
                 q.put(resp)
-            elif "warning" not in resp:
-                log("unmatched response:", line[:200])
+            elif "error" in resp:
+                log("katago error:", line[:200])
 
     def _fail_all(self, msg):
         with self.lock:
@@ -123,18 +133,22 @@ class KataGoEngine:
         return {"engine": self.name, "ok": True,
                 "message": "準備完了" if self.ready.is_set() else "起動中 (モデル読み込み中)…"}
 
-    def analyze(self, positions, params, timeout=600):
-        """positions: [{"stones": [[color, x, y], ...], "komi"?: float}] → [{"winrateWhite", "scoreLeadWhite", "visits"} | {"error"}]"""
+    def analyze(self, positions, params, on_result=None, timeout=600):
+        """positions: [{"stones": [[color, x, y], ...], "komi"?: float}] → [{"winrateWhite", "scoreLeadWhite", "visits"} | {"error"}]
+
+        on_result(i, result) は各局面の解析が終わるたびに (完了順で) 呼ばれる。
+        """
         if self.proc.poll() is not None:
             raise RuntimeError(self.error or "KataGo が起動していません")
         size = params["boardSize"]
-        pending = []
-        for pos in positions:
+        done_q = queue.Queue()  # この要求の全局面の結果を完了順に受け取る
+        qids = []
+        for idx, pos in enumerate(positions):
             with self.lock:
                 self.counter += 1
                 qid = f"q{self.counter}"
-                q = queue.Queue()
-                self.waiters[qid] = q
+                self.waiters[qid] = _Tagged(done_q, idx)
+            qids.append(qid)
             query = {
                 "id": qid,
                 "initialStones": [[c, to_gtp(x, y, size)] for c, x, y in pos["stones"]],
@@ -146,33 +160,59 @@ class KataGoEngine:
                 "boardYSize": size,
                 "maxVisits": params["visits"],
             }
-            pending.append(q)
             self.proc.stdin.write(json.dumps(query) + "\n")
         self.proc.stdin.flush()
 
+        try:
+            return self._collect(positions, done_q, on_result, timeout)
+        finally:
+            self._terminate_unfinished(qids)
+
+    def _terminate_unfinished(self, qids):
+        """中止 (クライアント切断) やタイムアウトで残った問い合わせを KataGo 側でも打ち切る。"""
+        with self.lock:
+            left = [q for q in qids if self.waiters.pop(q, None) is not None]
+        if not left or self.proc.poll() is not None:
+            return
+        log(f"  未完了の {len(left)} 局面の解析を打ち切ります")
+        try:
+            for q in left:
+                self.proc.stdin.write(json.dumps({"id": f"t{q}", "action": "terminate", "terminateId": q}) + "\n")
+            self.proc.stdin.flush()
+        except OSError:
+            pass
+
+    def _collect(self, positions, done_q, on_result, timeout):
         deadline = time.time() + timeout
-        results = []
+        results = [None] * len(positions)
         last_log = time.time()
-        for done, q in enumerate(pending):
-            if len(pending) > 1 and time.time() - last_log >= 2.0:
+        for done in range(len(positions)):
+            if len(positions) > 1 and time.time() - last_log >= 2.0:
                 last_log = time.time()
-                log(f"  … KataGo 解析中 {done}/{len(pending)}")
+                log(f"  … KataGo 解析中 {done}/{len(positions)}")
             try:
-                resp = q.get(timeout=max(1, deadline - time.time()))
+                idx, resp = done_q.get(timeout=max(1, deadline - time.time()))
             except queue.Empty:
-                results.append({"error": "timeout"})
-                continue
+                break
             if "error" in resp:
-                results.append({"error": resp["error"]})
-                continue
-            root = resp.get("rootInfo", {})
-            wr_b = root.get("winrate")
-            lead_b = root.get("scoreLead")
-            results.append({
-                "winrateWhite": None if wr_b is None else 1.0 - wr_b,
-                "scoreLeadWhite": None if lead_b is None else -lead_b,
-                "visits": root.get("visits"),
-            })
+                result = {"error": resp["error"]}
+            else:
+                root = resp.get("rootInfo", {})
+                wr_b = root.get("winrate")
+                lead_b = root.get("scoreLead")
+                result = {
+                    "winrateWhite": None if wr_b is None else 1.0 - wr_b,
+                    "scoreLeadWhite": None if lead_b is None else -lead_b,
+                    "visits": root.get("visits"),
+                }
+            results[idx] = result
+            if on_result:
+                on_result(idx, result)
+        for idx, r in enumerate(results):
+            if r is None:
+                results[idx] = {"error": "timeout"}
+                if on_result:
+                    on_result(idx, results[idx])
         return results
 
 
@@ -181,13 +221,16 @@ class MockEngine:
 
     name = "mock"
 
+    def __init__(self, delay=0.002):
+        self.delay = delay  # 1 局面あたりの疑似的な解析時間 (秒)
+
     def status(self):
         return {"engine": self.name, "ok": True, "message": "モックエンジン (勝率は疑似値です)"}
 
-    def analyze(self, positions, params, timeout=0):
+    def analyze(self, positions, params, on_result=None, timeout=0):
         size = params["boardSize"]
         out = []
-        for pos in positions:
+        for idx, pos in enumerate(positions):
             score = 0.0
             for c, x, y in pos["stones"]:
                 line = min(x, y, size - 1 - x, size - 1 - y) + 1
@@ -200,7 +243,9 @@ class MockEngine:
                 score += 6.5
             winrate = 1.0 / (1.0 + pow(2.718281828, -score / 4.0))
             out.append({"winrateWhite": winrate, "scoreLeadWhite": score, "visits": params["visits"]})
-        time.sleep(0.002 * len(positions))
+            time.sleep(self.delay)
+            if on_result:
+                on_result(idx, out[-1])
         return out
 
 
@@ -222,7 +267,7 @@ class CachedEngine:
         payload = json.dumps([sorted(map(list, pos["stones"])), pos_komi(pos, params), params], sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()
 
-    def analyze(self, positions, params):
+    def analyze(self, positions, params, on_result=None):
         with self.lock:
             self.requests += 1
             req = self.requests
@@ -238,15 +283,22 @@ class CachedEngine:
                     todo.append(i)
         log(f"[解析 #{req}] {len(positions)} 局面 (キャッシュ {len(positions) - len(todo)}, "
             f"新規 {len(todo)}, {params['visits']} visits)")
+        if on_result:
+            for i, r in enumerate(results):
+                if r is not None:
+                    on_result(i, r)
         if todo:
-            fresh = self.engine.analyze([positions[i] for i in todo], params)
-            with self.lock:
-                if len(self.cache) > self.max_entries:
-                    self.cache.clear()
-                for i, r in zip(todo, fresh):
-                    results[i] = r
-                    if "error" not in r:
+            def fresh_result(j, r):
+                i = todo[j]
+                results[i] = r
+                if "error" not in r:
+                    with self.lock:
+                        if len(self.cache) > self.max_entries:
+                            self.cache.clear()
                         self.cache[keys[i]] = r
+                if on_result:
+                    on_result(i, r)
+            self.engine.analyze([positions[i] for i in todo], params, on_result=fresh_result)
         elapsed = time.time() - t0
         errors = sum(1 for r in results if r and "error" in r)
         rate = f", {len(todo) / elapsed:.1f} 局面/秒" if todo and elapsed > 0 else ""
@@ -719,8 +771,26 @@ class Handler(SimpleHTTPRequestHandler):
             "visits": max(1, min(10000, int(body.get("visits", 100)))),
         }
         positions = body.get("positions", [])
-        results = self.engine.analyze(positions, params)
-        self._json({"results": results})
+        if not body.get("stream"):
+            return self._json({"results": self.engine.analyze(positions, params)})
+        # 1 局面終わるごとに 1 行 (NDJSON) 送り、UI で経過を表示できるようにする
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def send(obj):
+            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+            self.wfile.flush()
+        try:
+            self.engine.analyze(positions, params, on_result=lambda i, r: send({"i": i, "result": r}))
+            send({"done": True})
+        except (BrokenPipeError, ConnectionResetError):
+            log("analyze: クライアントが切断しました")
+        except Exception as e:  # noqa: BLE001
+            send({"error": str(e)})
 
     def _update_cards(self):
         body = self._body()
@@ -757,10 +827,11 @@ def main():
     ap.add_argument("--config", default=os.environ.get("KATAGO_CONFIG", os.path.join(ROOT, "analysis.cfg")),
                     help="KataGo analysis 用の設定ファイル")
     ap.add_argument("--mock", action="store_true", help="KataGo を使わず疑似エンジンで起動 (UI 確認用)")
+    ap.add_argument("--mock-delay", type=float, default=0.002, help="モックエンジンの 1 局面あたりの解析時間 (秒)")
     args = ap.parse_args()
 
     if args.mock:
-        engine = MockEngine()
+        engine = MockEngine(args.mock_delay)
     else:
         if not args.model:
             ap.error("--model (または環境変数 KATAGO_MODEL) を指定してください。UI だけ試す場合は --mock")

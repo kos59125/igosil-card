@@ -140,6 +140,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
         <span class="muted" id="opt-info"></span>
       </div>
       <div class="progress"><div id="opt-progress"></div></div>
+      <div class="msg" id="opt-live" style="font-weight:600"></div>
       <details id="opt-log-wrap" open style="margin-top:6px"><summary class="muted">評価ログ</summary>
         <div class="msg" id="opt-log" style="font-family:ui-monospace,Consolas,monospace;max-height:180px"></div></details>
       <div class="scroll" style="margin-top:8px">
@@ -461,10 +462,47 @@ function analysisParams() {
     nextPlayer: 'B',  // 配置後は常に黒番から
   };
 }
-async function analyze(positions) {
-  const data = await api('POST', '/api/analyze', { ...analysisParams(), positions: positions.map((p) => ({ stones: p.stones, komi: p.komi })) });
-  return data.results;
+let analyzeAbort = null;
+/**
+ * 局面をまとめて解析する。サーバーは 1 局面終わるごとに 1 行 (NDJSON) 返すので、
+ * onEach(i, result, doneCount) で途中経過を受け取れる。中止 (abortAnalyze) すると AbortError を投げる。
+ */
+async function analyze(positions, onEach, { abortable = false } = {}) {
+  const ctrl = new AbortController();
+  if (abortable) analyzeAbort = ctrl;  // 最適化の「中止」で打ち切る対象
+  const res = await fetch('/api/analyze', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+    body: JSON.stringify({ ...analysisParams(), stream: true, positions: positions.map((p) => ({ stones: p.stones, komi: p.komi })) }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  const results = new Array(positions.length);
+  let count = 0, buf = '';
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  const handle = (line) => {
+    if (!line.trim()) return;
+    const msg = JSON.parse(line);
+    if (msg.error) throw new Error(msg.error);
+    if (msg.i == null) return;
+    results[msg.i] = msg.result;
+    count++;
+    onEach?.(msg.i, msg.result, count);
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    lines.forEach(handle);
+  }
+  handle(buf);
+  if (analyzeAbort === ctrl) analyzeAbort = null;
+  return [...results].map((r) => r || { error: '結果がありません' });
 }
+function abortAnalyze() { analyzeAbort?.abort(); }
 async function refreshStatus() {
   const el = $('#engine-status');
   try {
@@ -617,9 +655,12 @@ async function evaluateCurrent() {
   const pos = renderAll();
   const seq = ++evalSeq;
   if (pos.conflicts.length) { setEval(null, '配置が衝突しています: ' + [...new Set(pos.conflicts.map((c) => c.reason))].join('、')); return; }
-  $('#eval-note').textContent = '計算中…';
+  const t0 = performance.now();
+  const tick = () => { if (seq === evalSeq) $('#eval-note').textContent = `計算中… ${fmtSec((performance.now() - t0) / 1000)}`; };
+  tick();
+  const timer = setInterval(tick, 500);
   try {
-    const [r] = await analyze([pos]);
+    const [r] = await analyze([pos]).finally(() => clearInterval(timer));
     if (seq !== evalSeq) return;
     if (r.error) setEval(null, 'エラー: ' + r.error); else setEval(r);
   } catch (e) { if (seq === evalSeq) setEval(null, 'エラー: ' + e.message); }
@@ -687,6 +728,28 @@ function describePl(pl) {
   const one = (p) => { if (!p) return '（なし）'; const c = cardById(p.id); return `${c.name}${p.flip ? '（反転）' : ''}`; };
   return `左上 ${one(pl.TL)} / 右下 ${one(pl.BR)}`;
 }
+/** 実行中の経過表示（1 秒ごとにも更新して、止まっていないことが分かるようにする） */
+const live = {
+  timer: null, state: null,
+  start(state) { this.state = { t0: performance.now(), ...state }; this.render(); clearInterval(this.timer); this.timer = setInterval(() => this.render(), 1000); },
+  update(patch) { Object.assign(this.state, patch); this.render(); },
+  stop(text) { clearInterval(this.timer); this.timer = null; this.state = null; $('#opt-live').textContent = text || ''; },
+  render() {
+    const st = this.state; if (!st) return;
+    const elapsed = (performance.now() - st.t0) / 1000;
+    const rate = st.done && elapsed > 0 ? st.done / elapsed : 0;
+    const parts = [
+      `${st.label}${st.done} / ${st.total} 局面（${st.total ? (100 * st.done / st.total).toFixed(1) : 0}%）`,
+      `バッチ ${st.batch}/${st.nBatches} 解析中（${st.inBatch}/${st.batchSize}）`,
+      `経過 ${fmtSec(elapsed)}`,
+    ];
+    if (rate) parts.push(`${rate.toFixed(1)} 局面/秒`, `残り約 ${fmtSec((st.total - st.done) / rate)}`);
+    else parts.push('最初の結果を待っています…');
+    let text = parts.join('｜');
+    if (st.best) text += `\n暫定最高 ${(st.best.winrateWhite * 100).toFixed(1)}%  ${describePl(st.best.pl)}`;
+    $('#opt-live').textContent = text;
+  },
+};
 async function evaluateMany(pls, onProgress, label = '') {
   const batch = Math.max(1, +$('#batch').value || 32);
   const out = [];
@@ -700,28 +763,39 @@ async function evaluateMany(pls, onProgress, label = '') {
   const nBatches = Math.ceil(valid.length / batch);
   logOpt(`${label}開始: ${valid.length} 局面${skipped ? `（衝突で除外 ${skipped}）` : ''}、${nBatches} バッチ × 最大 ${batch} 局面`);
   const t0 = performance.now();
-  let best = null, errors = 0;
+  let best = null, errors = 0, done = 0;
+  live.start({ label, total: valid.length, done: 0, batch: 0, nBatches, inBatch: 0, batchSize: 0, best: null });
   for (let i = 0; i < valid.length; i += batch) {
-    if (cancelOpt) { logOpt(`${label}中止しました`); break; }
+    if (cancelOpt) break;
     const chunk = valid.slice(i, i + batch);
     const tb = performance.now();
-    const res = await analyze(chunk.map((v) => v.pos));
     let cached = 0;
-    chunk.forEach((v, j) => {
-      if (res[j].error) { errors++; return; }
-      if (res[j].cached) cached++;
-      const r = { pl: v.pl, ...res[j] };
-      out.push(r);
-      if (!best || r.winrateWhite > best.winrateWhite) best = r;
-    });
-    const done = Math.min(valid.length, i + batch);
+    live.update({ batch: Math.floor(i / batch) + 1, inBatch: 0, batchSize: chunk.length });
+    try {
+      await analyze(chunk.map((v) => v.pos), (j, r, n) => {
+        done++;
+        if (r.error) errors++;
+        else {
+          if (r.cached) cached++;
+          const rr = { pl: chunk[j].pl, ...r };
+          out.push(rr);
+          if (!best || rr.winrateWhite > best.winrateWhite) best = rr;
+        }
+        live.update({ done, inBatch: n, best });
+        onProgress(done, valid.length);
+      }, { abortable: true });
+    } catch (e) {
+      if (e.name === 'AbortError') break;
+      throw e;
+    }
     const elapsed = (performance.now() - t0) / 1000;
     const eta = done < valid.length ? `、残り約 ${fmtSec(elapsed / done * (valid.length - done))}` : '';
     logOpt(`${label}バッチ ${Math.floor(i / batch) + 1}/${nBatches}: ${chunk.length} 局面 ${fmtSec((performance.now() - tb) / 1000)}` +
       `${cached ? `（キャッシュ ${cached}）` : ''} 累計 ${done}/${valid.length}${eta}` +
       (best ? ` | 暫定最高 ${(best.winrateWhite * 100).toFixed(1)}%` : ''));
-    onProgress(done, valid.length);
   }
+  if (cancelOpt) logOpt(`${label}中止しました（${done}/${valid.length} 局面まで評価）`);
+  live.stop();
   logOpt(`${label}完了: ${out.length} 局面、${fmtSec((performance.now() - t0) / 1000)}${errors ? `、エラー ${errors} 件` : ''}`);
   if (best) logOpt(`${label}最高: ${(best.winrateWhite * 100).toFixed(1)}%  ${describePl(best.pl)}`);
   return out;
@@ -756,14 +830,14 @@ async function optimize() {
         ...br.map((b) => ({ ...base, TL: $('#fix-tl').checked ? placement.TL : null, BR: b })),
       ];
       const total = stage1.length + K * K;
-      const r1 = await evaluateMany(stage1, (d) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${stage1.length}`; }, '段階 1 ');
+      const r1 = await evaluateMany(stage1, (d, n) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${n}`; }, '段階 1 ');
       const top = (key, list) => {
         const scored = r1.filter((r) => list.some((p) => p === r.pl[key]));
         scored.sort((x, y) => y.winrateWhite - x.winrateWhite);
         return scored.slice(0, K).map((r) => r.pl[key]);
       };
       const topTL = top('TL', tl), topBR = top('BR', br);
-      logOpt(`段階 1 の上位: 左上 ${topTL.length} 件、右下 ${topBR.length} 件 → ${topTL.length * topBR.length} 通りを評価`);
+      if (!cancelOpt) logOpt(`段階 1 の上位: 左上 ${topTL.length} 件、右下 ${topBR.length} 件 → ${topTL.length * topBR.length} 通りを評価`);
       const pls = [];
       for (const a of topTL) for (const b of topBR) pls.push({ ...base, TL: a, BR: b });
       // 段階 1 で中止した場合は段階 1 の結果をそのまま表示する
@@ -959,7 +1033,7 @@ $('#btn-optimize').onclick = optimize;
 // 全探索では K を使わないので隠す
 const syncTopK = () => { $('#top-k-label').hidden = $('#search-mode').value === 'full'; };
 $('#search-mode').addEventListener('change', syncTopK);
-$('#btn-cancel').onclick = () => { cancelOpt = true; };
+$('#btn-cancel').onclick = () => { cancelOpt = true; abortAnalyze(); };
 $('#btn-attr-advantage').onclick = () => {
   const opp = ['TR', 'BL'].map((k) => placement[k] && cardById(placement[k].id)?.attr).filter(Boolean);
   if (!opp.length) { alert('相手のカードが未設定です'); return; }
