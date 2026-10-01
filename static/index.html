@@ -178,14 +178,6 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
         <label><input type="checkbox" id="fix-br"> 右下を固定</label>
       </div>
       <div class="row">
-        <label>探索方法
-          <select id="search-mode">
-            <option value="two">高速（2 段階: 各隅で上位 K 件 → 組み合わせ）</option>
-            <option value="full">全探索（全組み合わせ）</option>
-          </select></label>
-        <label id="top-k-label">K <input type="number" id="top-k" value="6" min="1" max="50" style="width:4em"></label>
-      </div>
-      <div class="row">
         <button id="btn-optimize" class="primary">最適な配置を探す</button>
         <button id="btn-cancel" disabled>中止</button>
         <span class="muted" id="opt-info"></span>
@@ -958,13 +950,10 @@ const engineText = () => {
 };
 /** 結果に影響する入力パラメーター（キャッシュのキーとログの両方に使う） */
 function optimizationParams(tl, br) {
-  const mode = $('#search-mode').value;
-  const K = Math.max(1, +$('#top-k').value || 6);
   const cardSig = (p) => { if (!p) return null; const c = cardById(p.id); return [c.name, c.attr, c.slot, p.flip, c.moves]; };
   return {
     engine: { engine: engineInfo.engine, version: engineInfo.version, model: engineInfo.model },
     visits: +$('#visits').value || 1, komi: KOMI, rules: 'japanese',
-    mode, K: mode === 'full' ? null : K,
     opponent: { TR: cardSig(placement.TR), BL: cardSig(placement.BL) },
     attrs: $$('.attr-filter').filter((x) => x.checked).map((x) => x.value),
     ownedOnly: $('#owned-only').checked, tryFlip: $('#try-flip').checked,
@@ -974,7 +963,6 @@ function optimizationParams(tl, br) {
 }
 /** 入力パラメーターの説明（ログと結果欄に表示） */
 function describeParams(tl, br) {
-  const mode = $('#search-mode').value, K = Math.max(1, +$('#top-k').value || 6);
   const attrs = $$('.attr-filter').filter((x) => x.checked).map((x) => x.value).join('・') || 'なし';
   const opts = [$('#owned-only').checked ? '所持カードのみ' : '未所持も含む', $('#try-flip').checked ? '反転も試す' : '反転なし'];
   if ($('#fix-tl').checked) opts.push(`左上固定: ${cornerText('TL')}`);
@@ -982,7 +970,7 @@ function describeParams(tl, br) {
   return [
     `相手: 右上 (A) ${cornerText('TR')} / 左下 (B) ${cornerText('BL')}`,
     `エンジン: ${engineText()} / ${+$('#visits').value || 1} visits / コミ ${KOMI}（アゲハマで調整）・日本ルール`,
-    `探索: ${mode === 'full' ? '全探索' : `2 段階（K = ${K}）`} / 候補 左上 ${tl.length}・右下 ${br.length}（反転を含む）`,
+    `探索: 全探索 / 候補 左上 ${tl.length}・右下 ${br.length}（反転を含む）`,
     `条件: 属性 ${attrs} / ${opts.join(' / ')}`,
   ];
 }
@@ -1061,45 +1049,14 @@ async function optimize() {
       return;
     }
 
-    const mode = $('#search-mode').value;
-    const K = Math.max(1, +$('#top-k').value || 6);
     const base = { TR: placement.TR, BL: placement.BL };
     const ctx = { log, alive, onResult: insertResult };
-    let results = [], errors = 0;
     log('最適化開始');
-    if (mode === 'full' || (tl.length <= K && br.length <= K)) {
-      const pls = [];
-      for (const a of tl) for (const b of br) pls.push({ ...base, TL: a, BR: b });
-      resetResults('全探索: 解析中（結果が届くたびに順位の位置へ追加）');
-      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ', ctx);
-      errors = results.errors || 0;
-    } else {
-      // 段階 1: 各隅を単独で評価（もう一方の隅は現在の選択、未選択なら空）
-      const stage1 = [
-        ...tl.map((a) => ({ ...base, TL: a, BR: $('#fix-br').checked ? placement.BR : null })),
-        ...br.map((b) => ({ ...base, TL: $('#fix-tl').checked ? placement.TL : null, BR: b })),
-      ];
-      const total = stage1.length + K * K;
-      resetResults('段階 1: 各隅を単独で評価中（もう一方の隅は空）');
-      const r1 = await evaluateMany(stage1, (d, n) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${n}`; }, '段階 1 ', ctx);
-      if (!alive()) return;
-      const top = (key, list) => {
-        const scored = r1.filter((r) => list.some((p) => p === r.pl[key]));
-        scored.sort((x, y) => y.winrateWhite - x.winrateWhite);
-        return scored.slice(0, K).map((r) => r.pl[key]);
-      };
-      const topTL = top('TL', tl), topBR = top('BR', br);
-      errors = r1.errors || 0;
-      if (cancelOpt) results = r1;  // 段階 1 で中止した場合は段階 1 の結果をそのまま表示する
-      else {
-        log(`段階 1 の上位: 左上 ${topTL.length} 件、右下 ${topBR.length} 件 → ${topTL.length * topBR.length} 通りを評価`);
-        const pls = [];
-        for (const a of topTL) for (const b of topBR) pls.push({ ...base, TL: a, BR: b });
-        resetResults(`段階 2: 上位 ${topTL.length} × ${topBR.length} 通りの組み合わせを評価中`);
-        results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; }, '段階 2 ', ctx);
-        errors += results.errors || 0;
-      }
-    }
+    const pls = [];
+    for (const a of tl) for (const b of br) pls.push({ ...base, TL: a, BR: b });
+    resetResults('全探索: 解析中（結果が届くたびに順位の位置へ追加）');
+    const results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ', ctx);
+    const errors = results.errors || 0;
     if (!alive()) return;
     const elapsed = fmtSec((performance.now() - t0) / 1000);
     renderResults(results, cancelOpt ? '中止（評価できた分の結果）' : '');
@@ -1386,9 +1343,6 @@ $('#btn-copy-sgf').onclick = async () => {
 };
 $('#show-numbers').onchange = renderAll;
 $('#btn-optimize').onclick = optimize;
-// 全探索では K を使わないので隠す
-const syncTopK = () => { $('#top-k-label').hidden = $('#search-mode').value === 'full'; };
-$('#search-mode').addEventListener('change', syncTopK);
 $('#btn-cancel').onclick = () => { cancelOpt = true; abortAnalyze(); };
 $('#btn-attr-advantage').onclick = () => {
   const opp = ['TR', 'BL'].map((k) => placement[k] && cardById(placement[k].id)?.attr).filter(Boolean);
@@ -1401,7 +1355,7 @@ $('#btn-attr-advantage').onclick = () => {
 };
 
 // 設定の保存・復元
-const SETTINGS = ['visits', 'batch', 'source-url', 'search-mode', 'top-k', 'owned-only', 'try-flip', 'auto-eval'];
+const SETTINGS = ['visits', 'batch', 'source-url', 'owned-only', 'try-flip', 'auto-eval'];
 const saved = store.get('settings', {});
 for (const id of SETTINGS) {
   const el = document.getElementById(id);
@@ -1413,7 +1367,6 @@ for (const id of SETTINGS) {
   });
 }
 
-syncTopK();
 refreshStatus();
 loadCards().then(() => { if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });
