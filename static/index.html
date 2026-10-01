@@ -132,7 +132,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
             <option value="two">高速（2 段階: 各隅で上位 K 件 → 組み合わせ）</option>
             <option value="full">全探索（全組み合わせ）</option>
           </select></label>
-        <label>K <input type="number" id="top-k" value="6" min="1" max="50" style="width:4em"></label>
+        <label id="top-k-label">K <input type="number" id="top-k" value="6" min="1" max="50" style="width:4em"></label>
       </div>
       <div class="row">
         <button id="btn-optimize" class="primary">最適な配置を探す</button>
@@ -140,6 +140,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
         <span class="muted" id="opt-info"></span>
       </div>
       <div class="progress"><div id="opt-progress"></div></div>
+      <details id="opt-log-wrap" open style="margin-top:6px"><summary class="muted">評価ログ</summary>
+        <div class="msg" id="opt-log" style="font-family:ui-monospace,Consolas,monospace;max-height:180px"></div></details>
       <div class="scroll" style="margin-top:8px">
         <table id="opt-results"><thead><tr><th>#</th><th>白勝率</th><th>リード</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
       </div>
@@ -673,7 +675,19 @@ function candidatesFor(cornerKey) {
     if (seen.has(key)) return false; seen.add(key); return true;
   });
 }
-async function evaluateMany(pls, onProgress) {
+// 評価ログ（最適化タブ）
+const fmtSec = (s) => (s >= 90 ? `${Math.floor(s / 60)} 分 ${Math.round(s % 60)} 秒` : `${s.toFixed(1)} 秒`);
+function logOpt(text) {
+  const el = $('#opt-log');
+  const t = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+  el.textContent += `${t}  ${text}\n`;
+  el.scrollTop = el.scrollHeight;
+}
+function describePl(pl) {
+  const one = (p) => { if (!p) return '（なし）'; const c = cardById(p.id); return `${c.name}${p.flip ? '（反転）' : ''}`; };
+  return `左上 ${one(pl.TL)} / 右下 ${one(pl.BR)}`;
+}
+async function evaluateMany(pls, onProgress, label = '') {
   const batch = Math.max(1, +$('#batch').value || 32);
   const out = [];
   const valid = [];
@@ -682,13 +696,34 @@ async function evaluateMany(pls, onProgress) {
     if (pos.conflicts.length) continue;
     valid.push({ pl, pos });
   }
+  const skipped = pls.length - valid.length;
+  const nBatches = Math.ceil(valid.length / batch);
+  logOpt(`${label}開始: ${valid.length} 局面${skipped ? `（衝突で除外 ${skipped}）` : ''}、${nBatches} バッチ × 最大 ${batch} 局面`);
+  const t0 = performance.now();
+  let best = null, errors = 0;
   for (let i = 0; i < valid.length; i += batch) {
-    if (cancelOpt) break;
+    if (cancelOpt) { logOpt(`${label}中止しました`); break; }
     const chunk = valid.slice(i, i + batch);
+    const tb = performance.now();
     const res = await analyze(chunk.map((v) => v.pos));
-    chunk.forEach((v, j) => { if (!res[j].error) out.push({ pl: v.pl, ...res[j] }); });
-    onProgress(Math.min(valid.length, i + batch), valid.length);
+    let cached = 0;
+    chunk.forEach((v, j) => {
+      if (res[j].error) { errors++; return; }
+      if (res[j].cached) cached++;
+      const r = { pl: v.pl, ...res[j] };
+      out.push(r);
+      if (!best || r.winrateWhite > best.winrateWhite) best = r;
+    });
+    const done = Math.min(valid.length, i + batch);
+    const elapsed = (performance.now() - t0) / 1000;
+    const eta = done < valid.length ? `、残り約 ${fmtSec(elapsed / done * (valid.length - done))}` : '';
+    logOpt(`${label}バッチ ${Math.floor(i / batch) + 1}/${nBatches}: ${chunk.length} 局面 ${fmtSec((performance.now() - tb) / 1000)}` +
+      `${cached ? `（キャッシュ ${cached}）` : ''} 累計 ${done}/${valid.length}${eta}` +
+      (best ? ` | 暫定最高 ${(best.winrateWhite * 100).toFixed(1)}%` : ''));
+    onProgress(done, valid.length);
   }
+  logOpt(`${label}完了: ${out.length} 局面、${fmtSec((performance.now() - t0) / 1000)}${errors ? `、エラー ${errors} 件` : ''}`);
+  if (best) logOpt(`${label}最高: ${(best.winrateWhite * 100).toFixed(1)}%  ${describePl(best.pl)}`);
   return out;
 }
 async function optimize() {
@@ -703,14 +738,17 @@ async function optimize() {
   const t0 = performance.now();
   const base = { TR: placement.TR, BL: placement.BL };
   let results = [];
+  $('#opt-log').textContent = '';
   try {
     const mode = $('#search-mode').value;
     const K = Math.max(1, +$('#top-k').value || 6);
+    logOpt(`最適化開始: 候補 左上 ${tl.length} / 右下 ${br.length}（反転を含む）、${$('#visits').value} visits、` +
+      (mode === 'full' ? '全探索' : `2 段階（K = ${K}）`));
     if (mode === 'full' || (tl.length <= K && br.length <= K)) {
       const pls = [];
       for (const a of tl) for (const b of br) pls.push({ ...base, TL: a, BR: b });
       info.textContent = `${pls.length} 通りを評価中…`;
-      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; });
+      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ');
     } else {
       // 段階 1: 各隅を単独で評価（もう一方の隅は現在の選択、未選択なら空）
       const stage1 = [
@@ -718,23 +756,27 @@ async function optimize() {
         ...br.map((b) => ({ ...base, TL: $('#fix-tl').checked ? placement.TL : null, BR: b })),
       ];
       const total = stage1.length + K * K;
-      const r1 = await evaluateMany(stage1, (d) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${stage1.length}`; });
+      const r1 = await evaluateMany(stage1, (d) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${stage1.length}`; }, '段階 1 ');
       const top = (key, list) => {
         const scored = r1.filter((r) => list.some((p) => p === r.pl[key]));
         scored.sort((x, y) => y.winrateWhite - x.winrateWhite);
         return scored.slice(0, K).map((r) => r.pl[key]);
       };
       const topTL = top('TL', tl), topBR = top('BR', br);
+      logOpt(`段階 1 の上位: 左上 ${topTL.length} 件、右下 ${topBR.length} 件 → ${topTL.length * topBR.length} 通りを評価`);
       const pls = [];
       for (const a of topTL) for (const b of topBR) pls.push({ ...base, TL: a, BR: b });
-      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; });
+      // 段階 1 で中止した場合は段階 1 の結果をそのまま表示する
+      results = cancelOpt ? r1 : await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; }, '段階 2 ');
     }
     results.sort((a, b) => b.winrateWhite - a.winrateWhite || matchupScore(b.pl) - matchupScore(a.pl));
     renderResults(results);
     info.textContent = `${cancelOpt ? '中止: ' : ''}${results.length} 通り評価（${((performance.now() - t0) / 1000).toFixed(1)} 秒）`;
+    logOpt(`最適化${cancelOpt ? '中止' : '終了'}: 合計 ${fmtSec((performance.now() - t0) / 1000)}`);
     bar.style.width = '100%';
   } catch (e) {
     info.textContent = 'エラー: ' + e.message;
+    logOpt('エラー: ' + e.message);
   } finally {
     $('#btn-optimize').disabled = false; $('#btn-cancel').disabled = true;
   }
@@ -914,6 +956,9 @@ $$('.tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 $('#btn-eval').onclick = evaluateCurrent;
 $('#show-numbers').onchange = renderAll;
 $('#btn-optimize').onclick = optimize;
+// 全探索では K を使わないので隠す
+const syncTopK = () => { $('#top-k-label').hidden = $('#search-mode').value === 'full'; };
+$('#search-mode').addEventListener('change', syncTopK);
 $('#btn-cancel').onclick = () => { cancelOpt = true; };
 $('#btn-attr-advantage').onclick = () => {
   const opp = ['TR', 'BL'].map((k) => placement[k] && cardById(placement[k].id)?.attr).filter(Boolean);
@@ -938,6 +983,7 @@ for (const id of SETTINGS) {
   });
 }
 
+syncTopK();
 refreshStatus();
 loadCards().then(() => { if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });

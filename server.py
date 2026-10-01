@@ -152,7 +152,11 @@ class KataGoEngine:
 
         deadline = time.time() + timeout
         results = []
-        for q in pending:
+        last_log = time.time()
+        for done, q in enumerate(pending):
+            if len(pending) > 1 and time.time() - last_log >= 2.0:
+                last_log = time.time()
+                log(f"  … KataGo 解析中 {done}/{len(pending)}")
             try:
                 resp = q.get(timeout=max(1, deadline - time.time()))
             except queue.Empty:
@@ -206,6 +210,7 @@ class CachedEngine:
         self.cache = {}
         self.max_entries = max_entries
         self.lock = threading.Lock()
+        self.requests = 0
 
     def status(self):
         s = self.engine.status()
@@ -218,6 +223,10 @@ class CachedEngine:
         return hashlib.sha1(payload.encode()).hexdigest()
 
     def analyze(self, positions, params):
+        with self.lock:
+            self.requests += 1
+            req = self.requests
+        t0 = time.time()
         keys = [self._key(p, params) for p in positions]
         results = [None] * len(positions)
         todo = []
@@ -227,6 +236,8 @@ class CachedEngine:
                     results[i] = dict(self.cache[k], cached=True)
                 else:
                     todo.append(i)
+        log(f"[解析 #{req}] {len(positions)} 局面 (キャッシュ {len(positions) - len(todo)}, "
+            f"新規 {len(todo)}, {params['visits']} visits)")
         if todo:
             fresh = self.engine.analyze([positions[i] for i in todo], params)
             with self.lock:
@@ -236,6 +247,10 @@ class CachedEngine:
                     results[i] = r
                     if "error" not in r:
                         self.cache[keys[i]] = r
+        elapsed = time.time() - t0
+        errors = sum(1 for r in results if r and "error" in r)
+        rate = f", {len(todo) / elapsed:.1f} 局面/秒" if todo and elapsed > 0 else ""
+        log(f"[解析 #{req}] 完了 {elapsed:.1f} 秒{rate}" + (f", エラー {errors} 件" if errors else ""))
         return results
 
 
