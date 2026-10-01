@@ -9,7 +9,7 @@
 :root {
   --bg: #f5f3ee; --panel: #ffffff; --text: #1f2328; --muted: #6a737d; --border: #d8d4cc;
   --accent: #b5462c; --accent-2: #2f6f9f; --ok: #2e7d32; --bad: #c62828;
-  --board: #dcb35c; --board-line: #5a4320;
+  --board: #dcb35c; --board-line: #5a4320; --flash: rgba(47, 111, 159, .28);
   /* 属性色: ゲーム内カードアイコン左下の属性バッジの色 */
   --chi: #e6c46c; --chu: #a6cf6e; --umi: #74b4d6;
 }
@@ -17,7 +17,7 @@
   :root:not([data-theme="light"]) {
     --bg: #17181b; --panel: #212328; --text: #e6e6e6; --muted: #9aa0a6; --border: #3a3d44;
     --accent: #e0745a; --accent-2: #6aaee0; --ok: #66bb6a; --bad: #ef5350;
-    --board: #c9a14e; --board-line: #4a3618;
+    --board: #c9a14e; --board-line: #4a3618; --flash: rgba(106, 174, 224, .3);
   }
 }
 * { box-sizing: border-box; }
@@ -65,6 +65,15 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: middle; }
 th { font-weight: 600; color: var(--muted); font-size: 12px; position: sticky; top: 0; background: var(--panel); }
 tr.clickable { cursor: pointer; } tr.clickable:hover { background: var(--bg); }
+/* 解析中に挿入された行をふわっと強調する */
+tr.row-new { animation: row-in 1.8s ease-out; }
+@keyframes row-in {
+  0% { opacity: 0; transform: translateY(-4px); background: var(--flash); }
+  20% { opacity: 1; transform: none; background: var(--flash); }
+  100% { background: transparent; }
+}
+#opt-caption { font-size: 12px; color: var(--muted); margin: 8px 0 2px; }
+#opt-caption:empty { display: none; }
 .scroll { max-height: 460px; overflow: auto; }
 .progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent-2); width: 0; transition: width .2s; }
@@ -151,6 +160,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <details id="opt-log-wrap" open style="margin-top:6px"><summary class="muted">評価ログ</summary>
         <div class="msg" id="opt-log" style="font-family:ui-monospace,Consolas,monospace;max-height:180px"></div></details>
       <div class="scroll" style="margin-top:8px">
+        <div id="opt-caption"></div>
         <table id="opt-results"><thead><tr><th>#</th><th>白勝率</th><th>リード</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="muted">結果の行をクリックすると盤面に反映します。</div>
@@ -772,7 +782,7 @@ const live = {
     $('#opt-live').textContent = text;
   },
 };
-async function evaluateMany(pls, onProgress, label = '') {
+async function evaluateMany(pls, onProgress, label = '', onResult = null) {
   const batch = Math.max(1, +$('#batch').value || 32);
   const out = [];
   const valid = [];
@@ -801,6 +811,7 @@ async function evaluateMany(pls, onProgress, label = '') {
           if (r.cached) cached++;
           const rr = { pl: chunk[j].pl, ...r };
           out.push(rr);
+          onResult?.(rr);
           if (!best || rr.winrateWhite > best.winrateWhite) best = rr;
         }
         live.update({ done, inBatch: n, best });
@@ -832,8 +843,7 @@ async function optimize() {
   $('#btn-optimize').disabled = true; $('#btn-cancel').disabled = false;
   const bar = $('#opt-progress'), info = $('#opt-info');
   // 前回の結果・ログ・進捗をクリアしてから始める
-  lastResults = [];
-  $('#opt-results tbody').innerHTML = '';
+  resetResults();
   $('#opt-log').textContent = '';
   live.stop();
   bar.style.width = '0';
@@ -850,7 +860,8 @@ async function optimize() {
       const pls = [];
       for (const a of tl) for (const b of br) pls.push({ ...base, TL: a, BR: b });
       info.textContent = `${pls.length} 通りを評価中…`;
-      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ');
+      resetResults('全探索: 解析中（結果が届くたびに順位の位置へ追加）');
+      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ', insertResult);
     } else {
       // 段階 1: 各隅を単独で評価（もう一方の隅は現在の選択、未選択なら空）
       const stage1 = [
@@ -858,7 +869,8 @@ async function optimize() {
         ...br.map((b) => ({ ...base, TL: $('#fix-tl').checked ? placement.TL : null, BR: b })),
       ];
       const total = stage1.length + K * K;
-      const r1 = await evaluateMany(stage1, (d, n) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${n}`; }, '段階 1 ');
+      resetResults('段階 1: 各隅を単独で評価中（もう一方の隅は空）');
+      const r1 = await evaluateMany(stage1, (d, n) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${n}`; }, '段階 1 ', insertResult);
       const top = (key, list) => {
         const scored = r1.filter((r) => list.some((p) => p === r.pl[key]));
         scored.sort((x, y) => y.winrateWhite - x.winrateWhite);
@@ -869,10 +881,10 @@ async function optimize() {
       const pls = [];
       for (const a of topTL) for (const b of topBR) pls.push({ ...base, TL: a, BR: b });
       // 段階 1 で中止した場合は段階 1 の結果をそのまま表示する
-      results = cancelOpt ? r1 : await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; }, '段階 2 ');
+      if (!cancelOpt) resetResults(`段階 2: 上位 ${topTL.length} × ${topBR.length} 通りの組み合わせを評価中`);
+      results = cancelOpt ? r1 : await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; }, '段階 2 ', insertResult);
     }
-    results.sort((a, b) => b.winrateWhite - a.winrateWhite || matchupScore(b.pl) - matchupScore(a.pl));
-    renderResults(results);
+    renderResults(results, cancelOpt ? '中止（評価できた分の結果）' : '');
     info.textContent = `${cancelOpt ? '中止: ' : ''}${results.length} 通り評価（${((performance.now() - t0) / 1000).toFixed(1)} 秒）`;
     logOpt(`最適化${cancelOpt ? '中止' : '終了'}: 合計 ${fmtSec((performance.now() - t0) / 1000)}`);
     bar.style.width = '100%';
@@ -888,21 +900,59 @@ function placementText(p) {
   const c = cardById(p.id);
   return `<span class="attr ${c.attr}">${c.attr}</span> <span class="muted">${esc(groupShort(c))}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}`;
 }
+// 結果の表（上位 RESULT_LIMIT 件）。解析中は結果が届くたびに順位の位置へ挿入する
+const RESULT_LIMIT = 50;
 let lastResults = [];
-function renderResults(results) {
-  lastResults = results;
+/** 並び順: 白勝率の高い順、同じなら属性相性の良い順 */
+const compareResults = (a, b) => b.winrateWhite - a.winrateWhite || matchupScore(b.pl) - matchupScore(a.pl);
+function resultRow(r) {
+  const m = matchupScore(r.pl);
+  const tr = document.createElement('tr');
+  tr.className = 'clickable';
+  tr.innerHTML = `<td></td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
+    <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td>
+    <td>${placementText(r.pl.TL)}</td><td>${placementText(r.pl.BR)}</td>
+    <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td>`;
+  tr._result = r;
+  return tr;
+}
+function renumberRows(from = 0) {
+  const rows = $('#opt-results tbody').rows;
+  for (let i = from; i < rows.length; i++) rows[i].cells[0].textContent = i + 1;
+}
+/** 表を空にして、解析中の段階を見出しに出す */
+function resetResults(caption = '') {
+  lastResults = [];
+  $('#opt-results tbody').innerHTML = '';
+  $('#opt-caption').textContent = caption;
+}
+/** 解析中に 1 件追加。上位に入るなら順位の位置に挿入して強調表示する */
+function insertResult(r) {
+  let lo = 0, hi = lastResults.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (compareResults(lastResults[mid], r) <= 0) lo = mid + 1; else hi = mid; }
+  lastResults.splice(lo, 0, r);
+  if (lo >= RESULT_LIMIT) return;
   const tb = $('#opt-results tbody');
-  tb.innerHTML = results.slice(0, 50).map((r, i) => {
-    const m = matchupScore(r.pl);
-    return `<tr class="clickable" data-i="${i}"><td>${i + 1}</td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
-      <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td>
-      <td>${placementText(r.pl.TL)}</td><td>${placementText(r.pl.BR)}</td>
-      <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td></tr>`;
-  }).join('') || '<tr><td colspan="6" class="muted">有効な組み合わせがありませんでした</td></tr>';
+  const tr = resultRow(r);
+  tr.classList.add('row-new');
+  tr.addEventListener('animationend', () => tr.classList.remove('row-new'), { once: true });
+  tb.insertBefore(tr, tb.rows[lo] || null);
+  if (tb.rows.length > RESULT_LIMIT) tb.deleteRow(-1);
+  renumberRows(lo);
+}
+/** 最終結果を描き直す（強調表示なし） */
+function renderResults(results, caption = '') {
+  lastResults = [...results].sort(compareResults);
+  const tb = $('#opt-results tbody');
+  tb.innerHTML = '';
+  for (const r of lastResults.slice(0, RESULT_LIMIT)) tb.appendChild(resultRow(r));
+  if (!lastResults.length) tb.innerHTML = '<tr><td colspan="6" class="muted">有効な組み合わせがありませんでした</td></tr>';
+  renumberRows();
+  $('#opt-caption').textContent = caption;
 }
 $('#opt-results').addEventListener('click', (ev) => {
-  const tr = ev.target.closest('tr[data-i]'); if (!tr) return;
-  const r = lastResults[+tr.dataset.i];
+  const tr = ev.target.closest('tr'); if (!tr?._result) return;
+  const r = tr._result;
   placement.TL = r.pl.TL; placement.BR = r.pl.BR;
   store.set('placement', placement);
   syncCornerInputs(); updateAvailability(); renderAll();
