@@ -667,6 +667,12 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/cards":
             with self.cards_lock:
                 return self._json(load_cards())
+        if self.path == "/favicon.ico":
+            # <link rel="icon"> を見ずに /favicon.ico を取りに来るブラウザ向け
+            self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+            self.send_header("Location", "/favicon.svg")
+            self.end_headers()
+            return
         return super().do_GET()
 
     def do_POST(self):
