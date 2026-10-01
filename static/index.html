@@ -45,6 +45,8 @@ label { cursor: pointer; }
 .corner.mine { border-color: var(--accent-2); }
 .corner .title { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
 .corner select { width: 100%; margin: 4px 0; }
+.corner option:disabled { color: #9a9a9a; background: #e4e4e4; }
+.corner input:disabled + span, .corner label:has(input:disabled) { color: var(--muted); opacity: .6; }
 .attr { display: inline-block; min-width: 1.6em; text-align: center; border-radius: 4px; color: #fff; font-size: 12px; padding: 0 4px; }
 .attr.地 { background: var(--chi); } .attr.宙 { background: var(--chu); } .attr.海 { background: var(--umi); }
 .result { display: flex; gap: 16px; align-items: baseline; margin-top: 10px; flex-wrap: wrap; }
@@ -86,6 +88,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   <section class="panel">
     <div id="board-wrap"><svg id="board" viewBox="0 0 400 400" aria-label="盤面"></svg></div>
     <div class="corners" id="corners"></div>
+    <div class="muted">グレーのカード・反転は相手の配置と石が衝突するため置けません（相手の配置が優先）。</div>
+    <div class="msg" id="placement-note"></div>
     <div class="row">
       <button id="btn-eval" class="primary">勝率を計算</button>
       <label><input type="checkbox" id="auto-eval" checked> 変更時に自動計算</label>
@@ -409,6 +413,8 @@ async function loadCards() {
   st.textContent = data.isEmpty ? 'カードがありません: 「カードリスト更新」で取得してください' : `カード ${activeCards().length} 枚` + (data.fetchedAt ? `（${data.fetchedAt.replace('T', ' ')} 取得）` : '');
   st.className = 'status' + (data.isEmpty ? ' bad' : '');
   for (const k of CORNER_ORDER) if (placement[k] && !cardById(placement[k].id)) placement[k] = null;
+  $('#placement-note').textContent = enforcePlacementRules().join('\n');
+  store.set('placement', placement);
   renderCorners(); renderCardTable(); renderAll();
 }
 async function saveCards() {
@@ -477,11 +483,63 @@ function renderCorners() {
     const sel = div.querySelector('select'), flip = div.querySelector('input');
     sel.value = placement[key]?.id || '';
     flip.checked = !!placement[key]?.flip;
-    sel.onchange = () => { placement[key] = sel.value ? { id: sel.value, flip: flip.checked } : null; onPlacementChange(); };
+    sel.onchange = () => {
+      if (!sel.value) placement[key] = null;
+      else {
+        // 選んだ向きで置けない場合は、置けるほうの向きにする
+        const ok = c.mine ? placeable(key, sel.value) : [true, true];
+        const f = ok[+flip.checked] ? flip.checked : !flip.checked;
+        placement[key] = { id: sel.value, flip: f };
+      }
+      onPlacementChange();
+    };
     flip.onchange = () => { if (placement[key]) placement[key].flip = flip.checked; onPlacementChange(); };
   }
-  updateBadges();
+  updateAvailability();
 }
+
+// ---------------------------------------------------------------------------
+// 配置ルール: 石が衝突する配置はできない。相手（右上・左下）が優先で、
+// 置けないのは自分のカード（左上・右下）。
+// ---------------------------------------------------------------------------
+const MY_CORNERS = ['TL', 'BR'];
+/** 自分の隅 key にカード id を [反転なし, 反転あり] で置けるか（他の 3 隅は現在の配置） */
+function placeable(key, id, pl = placement) {
+  const base = buildPosition({ ...pl, [key]: null }).conflicts.length;
+  return [false, true].map((flip) => buildPosition({ ...pl, [key]: { id, flip } }).conflicts.length <= base);
+}
+/** 相手の配置変更などで置けなくなった自分のカードを、反転で回避するか外す。メッセージを返す */
+function enforcePlacementRules() {
+  const notes = [];
+  for (const key of MY_CORNERS) {
+    const p = placement[key];
+    if (!p || !cardById(p.id)) continue;
+    const ok = placeable(key, p.id);
+    if (ok[+p.flip]) continue;
+    const name = cardById(p.id).name;
+    if (ok[+!p.flip]) { placement[key] = { ...p, flip: !p.flip }; notes.push(`${CORNERS[key].label}の「${name}」は衝突するため${p.flip ? '反転を解除' : '反転'}しました`); }
+    else { placement[key] = null; notes.push(`${CORNERS[key].label}の「${name}」は衝突して置けないため外しました`); }
+  }
+  return notes;
+}
+/** 自分の隅で置けないカード・向きをグレーアウトする */
+function updateAvailability() {
+  for (const key of MY_CORNERS) {
+    const sel = $(`#corners select[data-corner="${key}"]`), flip = $(`#corners input[data-flip="${key}"]`);
+    if (!sel) continue;
+    for (const o of sel.options) {
+      if (!o.value) continue;
+      const ok = placeable(key, o.value);
+      o.disabled = !ok[0] && !ok[1];
+      o.title = o.disabled ? '相手の配置と衝突するため置けません' : !ok[0] ? '反転した向きのみ置けます' : !ok[1] ? '反転しない向きのみ置けます' : '';
+    }
+    const p = placement[key];
+    const ok = p ? placeable(key, p.id) : [true, true];
+    flip.disabled = !p || !ok[+!p.flip];
+    flip.closest('label').title = p && !ok[+!p.flip] ? (p.flip ? '反転しない向きでは衝突します' : '反転すると衝突します') : '';
+  }
+}
+
 function updateBadges() {
   for (const key of CORNER_ORDER) {
     const badge = $(`#corners select[data-corner="${key}"]`)?.closest('.corner').querySelector('.attr-badge');
@@ -506,9 +564,13 @@ function renderAll() {
   return pos;
 }
 function onPlacementChange() {
+  const notes = enforcePlacementRules();
   store.set('placement', placement);
+  syncCornerInputs();
+  updateAvailability();
   renderAll();
   setEval(null, '');
+  $('#placement-note').textContent = notes.join('\n');
   if ($('#auto-eval').checked) evaluateCurrent();
 }
 function setEval(r, note) {
@@ -668,7 +730,8 @@ $('#opt-results').addEventListener('click', (ev) => {
   const r = lastResults[+tr.dataset.i];
   placement.TL = r.pl.TL; placement.BR = r.pl.BR;
   store.set('placement', placement);
-  syncCornerInputs(); renderAll();
+  syncCornerInputs(); updateAvailability(); renderAll();
+  $('#placement-note').textContent = '';
   setEval(r);
 });
 
