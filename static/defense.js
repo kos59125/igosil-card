@@ -147,7 +147,7 @@
     const rate = store.get(RATE_KEY, 0);
     let text = `自分の候補: 右上 (A) ${myA.length} 枚 × 左下 (B) ${myB.length} 枚 → 向き込み ${items.length} 組（両方反転なし・A のみ反転）。` +
       `相手の応手: 左上 ${oppA.length} × 右下 ${oppB.length}。全部評価すると最大 ${upper.toLocaleString()} 局面`;
-    if (rate) text += `（全探索は直近の速度 ${rate.toFixed(0)} 局面/秒で約 ${fmtSec(upper / rate)}。有望なものから評価するので、途中で中止しても暫定の答えが出ます）`;
+    if (rate) text += `（全探索は直近の速度 ${rate.toFixed(0)} 局面/sで約 ${fmtSec(upper / rate)}。有望なものから評価するので、途中で中止しても暫定の答えが出ます）`;
     $('#def-estimate').textContent = text;
   }
   $$('.def-attr').forEach((x) => x.addEventListener('change', updateEstimate));
@@ -168,11 +168,11 @@
       const parts = [`局面 ${s.evals.toLocaleString()} 評価`, `経過 ${fmtSec(el)}`,
         `評価済みの組 ${s.touched} / ${s.items}（全応手を評価済み ${s.complete}）`,
         `全体の ${(100 * s.done / s.upper).toFixed(3)}%`];
-      if (rate) parts.push(`${rate.toFixed(1)} 局面/秒`, `全探索の完了まで約 ${fmtSec(Math.max(0, s.upper - s.done) / rate)}`);
+      if (rate) parts.push(`${rate.toFixed(1)} 局面/s`, `全探索の完了まで約 ${fmtSec(Math.max(0, s.upper - s.done) / rate)}`);
       else parts.push('最初の結果を待っています…');
-      let text = parts.join('｜');
-      if (s.best) text += `\n最良の組 ${vText(s.best)}  右上 ${cardTxt(s.best.a)} / 左下 ${cardTxt(s.best.b)}`;
-      $('#def-live').textContent = text;
+      let html = liveHtml(parts);
+      if (s.best) html += esc(`\n最良の組 ${vText(s.best)}  右上 ${cardTxt(s.best.a)} / 左下 ${cardTxt(s.best.b)}`);
+      $('#def-live').innerHTML = html;
       $('#def-progress').style.width = Math.min(100, 100 * s.done / s.upper) + '%';
     },
   };

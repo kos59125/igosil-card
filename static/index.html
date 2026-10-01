@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>定石カード最適化</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
 <style>
 :root {
   --bg: #f5f3ee; --panel: #ffffff; --text: #1f2328; --muted: #6a737d; --border: #d8d4cc;
@@ -21,7 +24,8 @@
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 "BIZ UDPGothic", system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+.nw { white-space: nowrap; }
 header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
 header h1 { font-size: 16px; margin: 0; }
 .status { font-size: 12px; color: var(--muted); }
@@ -833,15 +837,18 @@ function candidatesFor(cornerKey) {
   });
 }
 // 評価ログ（最適化タブ）
-/** 秒数を「1 日 2 時間 3 分 4 秒」の形で表示する（上位 2 単位まで。1 分未満は小数 1 桁） */
+/** 秒数を短く表示する: 1 分未満は「6.9s」、1 時間未満は「1'58''」、それ以上は「2h03'」「3d04h」 */
 function fmtSec(s) {
   if (!Number.isFinite(s)) return '—';
-  if (s < 60) return `${s.toFixed(1)} 秒`;
-  const t = Math.round(s);
-  const units = [['日', Math.floor(t / 86400)], ['時間', Math.floor(t / 3600) % 24], ['分', Math.floor(t / 60) % 60], ['秒', t % 60]];
-  const first = units.findIndex(([, v]) => v > 0);
-  return units.slice(first, first + 2).filter(([, v], i) => i === 0 || v > 0).map(([u, v]) => `${v} ${u}`).join(' ');
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const t = Math.round(s), pad = (v) => String(v).padStart(2, '0');
+  const d = Math.floor(t / 86400), h = Math.floor(t / 3600) % 24, m = Math.floor(t / 60) % 60, sec = t % 60;
+  if (d) return `${d}d${pad(h)}h`;
+  if (h) return `${h}h${pad(m)}'`;
+  return `${m}'${pad(sec)}''`;
 }
+/** 実行中の経過表示の HTML（各項目の途中では改行しない） */
+const liveHtml = (parts) => parts.map((p) => `<span class="nw">${esc(p)}</span>`).join('｜');
 function logOpt(text) {
   const el = $('#opt-log');
   const t = new Date().toLocaleTimeString('ja-JP', { hour12: false });
@@ -867,11 +874,11 @@ const live = {
       `バッチ ${st.batch}/${st.nBatches} 解析中（${st.inBatch}/${st.batchSize}）`,
       `経過 ${fmtSec(elapsed)}`,
     ];
-    if (rate) parts.push(`${rate.toFixed(1)} 局面/秒`, `残り約 ${fmtSec((st.total - st.done) / rate)}`);
+    if (rate) parts.push(`${rate.toFixed(1)} 局面/s`, `残り約 ${fmtSec((st.total - st.done) / rate)}`);
     else parts.push('最初の結果を待っています…');
-    let text = parts.join('｜');
-    if (st.best) text += `\n暫定最高 ${(st.best.winrateWhite * 100).toFixed(1)}%  ${describePl(st.best.pl)}`;
-    $('#opt-live').textContent = text;
+    let html = liveHtml(parts);
+    if (st.best) html += esc(`\n暫定最高 ${(st.best.winrateWhite * 100).toFixed(1)}%  ${describePl(st.best.pl)}`);
+    $('#opt-live').innerHTML = html;
   },
 };
 /**
