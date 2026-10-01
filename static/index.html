@@ -73,6 +73,8 @@ tr.row-new { animation: row-in 1.8s ease-out; }
   100% { background: transparent; }
 }
 #opt-caption { font-size: 12px; color: var(--muted); margin: 8px 0 2px; }
+#opt-context { font-size: 12px; margin-top: 8px; padding: 6px 8px; border-left: 3px solid var(--accent-2); background: var(--bg); border-radius: 0 6px 6px 0; }
+#opt-context:empty { display: none; }
 #opt-caption:empty { display: none; }
 .scroll { max-height: 460px; overflow: auto; }
 .progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
@@ -160,6 +162,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <details id="opt-log-wrap" open style="margin-top:6px"><summary class="muted">評価ログ</summary>
         <div class="msg" id="opt-log" style="font-family:ui-monospace,Consolas,monospace;max-height:180px"></div></details>
       <div class="scroll" style="margin-top:8px">
+        <div id="opt-context"></div>
         <div id="opt-caption"></div>
         <table id="opt-results"><thead><tr><th>#</th><th>白勝率</th><th>リード</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
       </div>
@@ -531,14 +534,17 @@ async function analyze(positions, onEach, { abortable = false } = {}) {
   return [...results].map((r) => r || { error: '結果がありません' });
 }
 function abortAnalyze() { analyzeAbort?.abort(); }
+let engineInfo = {};  // /api/status の内容（エンジン種別・バージョン・モデル）
 async function refreshStatus() {
   const el = $('#engine-status');
   try {
     const s = await api('GET', '/api/status');
+    engineInfo = s;
     // 緑: 解析できる / 黄: モデル読み込み中 / 赤: 停止・エラー
     const loading = s.ok && s.ready === false;
     el.className = 'status ' + (!s.ok ? 'bad' : loading ? 'loading' : 'ok');
-    el.innerHTML = `<span class="dot"></span>${s.engine === 'mock' ? 'モック' : 'KataGo'}: ${s.message}`;
+    const name = s.engine === 'mock' ? 'モック' : `KataGo${s.version ? ' ' + s.version : ''}`;
+    el.innerHTML = `<span class="dot"></span>${esc(name)}: ${esc(s.message)}${s.engine !== 'mock' && s.model ? `（${esc(s.model)}）` : ''}`;
     // 読み込み中はこまめに、その後も KataGo の停止に気づけるよう定期的に確認する
     setTimeout(refreshStatus, loading ? 2000 : 15000);
   } catch (e) {
@@ -667,6 +673,9 @@ function renderAll() {
   return pos;
 }
 function onPlacementChange() {
+  // 相手の配置が変わったら、前の解析結果・ログは条件が違うのでクリアする
+  if (lastOpponentSig !== null && opponentSig() !== lastOpponentSig) clearOptimization();
+  lastOpponentSig = opponentSig();
   const notes = enforcePlacementRules();
   store.set('placement', placement);
   syncCornerInputs();
@@ -782,7 +791,12 @@ const live = {
     $('#opt-live').textContent = text;
   },
 };
-async function evaluateMany(pls, onProgress, label = '', onResult = null) {
+/**
+ * 局面をバッチに分けて解析する。ctx = { log, alive, onResult }
+ *  - log: 評価ログへの出力（クリアされた実行からは書き込まない）
+ *  - alive(): この実行がまだ有効か（クリアされたら false）
+ */
+async function evaluateMany(pls, onProgress, label, ctx) {
   const batch = Math.max(1, +$('#batch').value || 32);
   const out = [];
   const valid = [];
@@ -793,25 +807,26 @@ async function evaluateMany(pls, onProgress, label = '', onResult = null) {
   }
   const skipped = pls.length - valid.length;
   const nBatches = Math.ceil(valid.length / batch);
-  logOpt(`${label}開始: ${valid.length} 局面${skipped ? `（衝突で除外 ${skipped}）` : ''}、${nBatches} バッチ × 最大 ${batch} 局面`);
+  ctx.log(`${label}開始: ${valid.length} 局面${skipped ? `（衝突で除外 ${skipped}）` : ''}、${nBatches} バッチ × 最大 ${batch} 局面`);
   const t0 = performance.now();
   let best = null, errors = 0, done = 0;
   live.start({ label, total: valid.length, done: 0, batch: 0, nBatches, inBatch: 0, batchSize: 0, best: null });
   for (let i = 0; i < valid.length; i += batch) {
-    if (cancelOpt) break;
+    if (cancelOpt || !ctx.alive()) break;
     const chunk = valid.slice(i, i + batch);
     const tb = performance.now();
     let cached = 0;
     live.update({ batch: Math.floor(i / batch) + 1, inBatch: 0, batchSize: chunk.length });
     try {
       await analyze(chunk.map((v) => v.pos), (j, r, n) => {
+        if (!ctx.alive()) return;
         done++;
         if (r.error) errors++;
         else {
           if (r.cached) cached++;
           const rr = { pl: chunk[j].pl, ...r };
           out.push(rr);
-          onResult?.(rr);
+          ctx.onResult?.(rr);
           if (!best || rr.winrateWhite > best.winrateWhite) best = rr;
         }
         live.update({ done, inBatch: n, best });
@@ -823,45 +838,150 @@ async function evaluateMany(pls, onProgress, label = '', onResult = null) {
     }
     const elapsed = (performance.now() - t0) / 1000;
     const eta = done < valid.length ? `、残り約 ${fmtSec(elapsed / done * (valid.length - done))}` : '';
-    logOpt(`${label}バッチ ${Math.floor(i / batch) + 1}/${nBatches}: ${chunk.length} 局面 ${fmtSec((performance.now() - tb) / 1000)}` +
+    ctx.log(`${label}バッチ ${Math.floor(i / batch) + 1}/${nBatches}: ${chunk.length} 局面 ${fmtSec((performance.now() - tb) / 1000)}` +
       `${cached ? `（キャッシュ ${cached}）` : ''} 累計 ${done}/${valid.length}${eta}` +
       (best ? ` | 暫定最高 ${(best.winrateWhite * 100).toFixed(1)}%` : ''));
   }
-  if (cancelOpt) logOpt(`${label}中止しました（${done}/${valid.length} 局面まで評価）`);
+  if (!ctx.alive()) return out;
+  if (cancelOpt) ctx.log(`${label}中止しました（${done}/${valid.length} 局面まで評価）`);
   live.stop();
-  logOpt(`${label}完了: ${out.length} 局面、${fmtSec((performance.now() - t0) / 1000)}${errors ? `、エラー ${errors} 件` : ''}`);
-  if (best) logOpt(`${label}最高: ${(best.winrateWhite * 100).toFixed(1)}%  ${describePl(best.pl)}`);
+  ctx.log(`${label}完了: ${out.length} 局面、${fmtSec((performance.now() - t0) / 1000)}${errors ? `、エラー ${errors} 件` : ''}`);
+  if (best) ctx.log(`${label}最高: ${(best.winrateWhite * 100).toFixed(1)}%  ${describePl(best.pl)}`);
+  out.errors = errors;
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// 最適化の入力パラメーター・結果のクリア・セッションキャッシュ
+// ---------------------------------------------------------------------------
+let optRun = 0;        // 実行ごとに増える。クリアでも増やして、実行中の処理を無効にする
+let optRunning = false;
+const cornerText = (key, p = placement[key]) => {
+  const c = p && cardById(p.id);
+  return c ? `${c.name} [${c.attr || '?'}・${groupShort(c)}]${p.flip ? '（反転）' : ''}` : '（なし）';
+};
+const engineText = () => {
+  const e = engineInfo || {};
+  if (e.engine === 'mock') return 'モックエンジン';
+  return `KataGo ${e.version || '（バージョン不明）'} / モデル ${e.model || '（不明）'}`;
+};
+/** 結果に影響する入力パラメーター（キャッシュのキーとログの両方に使う） */
+function optimizationParams(tl, br) {
+  const mode = $('#search-mode').value;
+  const K = Math.max(1, +$('#top-k').value || 6);
+  const cardSig = (p) => { if (!p) return null; const c = cardById(p.id); return [c.name, c.attr, c.slot, p.flip, c.moves]; };
+  return {
+    engine: { engine: engineInfo.engine, version: engineInfo.version, model: engineInfo.model },
+    visits: +$('#visits').value || 1, komi: KOMI, rules: 'japanese',
+    mode, K: mode === 'full' ? null : K,
+    opponent: { TR: cardSig(placement.TR), BL: cardSig(placement.BL) },
+    attrs: $$('.attr-filter').filter((x) => x.checked).map((x) => x.value),
+    ownedOnly: $('#owned-only').checked, tryFlip: $('#try-flip').checked,
+    fixed: { TL: $('#fix-tl').checked ? cardSig(placement.TL) || 'none' : null, BR: $('#fix-br').checked ? cardSig(placement.BR) || 'none' : null },
+    candidates: { TL: tl.map(cardSig), BR: br.map(cardSig) },
+  };
+}
+/** 入力パラメーターの説明（ログと結果欄に表示） */
+function describeParams(tl, br) {
+  const mode = $('#search-mode').value, K = Math.max(1, +$('#top-k').value || 6);
+  const attrs = $$('.attr-filter').filter((x) => x.checked).map((x) => x.value).join('・') || 'なし';
+  const opts = [$('#owned-only').checked ? '所持カードのみ' : '未所持も含む', $('#try-flip').checked ? '反転も試す' : '反転なし'];
+  if ($('#fix-tl').checked) opts.push(`左上固定: ${cornerText('TL')}`);
+  if ($('#fix-br').checked) opts.push(`右下固定: ${cornerText('BR')}`);
+  return [
+    `相手: 右上 (A) ${cornerText('TR')} / 左下 (B) ${cornerText('BL')}`,
+    `エンジン: ${engineText()} / ${+$('#visits').value || 1} visits / コミ ${KOMI}（アゲハマで調整）・日本ルール`,
+    `探索: ${mode === 'full' ? '全探索' : `2 段階（K = ${K}）`} / 候補 左上 ${tl.length}・右下 ${br.length}（反転を含む）`,
+    `条件: 属性 ${attrs} / ${opts.join(' / ')}`,
+  ];
+}
+function showContext(lines) {
+  // 結果欄には相手の配置を常に表示し、他の条件も添える
+  $('#opt-context').innerHTML = lines.map((l, i) => (i === 0 ? `<b>${esc(l)}</b>` : `<div class="muted">${esc(l)}</div>`)).join('');
+}
+
+/** セッションキャッシュ（ブラウザを閉じる・タブを閉じると消える） */
+const optCache = {
+  mem: new Map(),
+  key(params) {
+    const str = JSON.stringify(params);
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;  // cyrb53
+    for (let i = 0; i < str.length; i++) { const c = str.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return 'igosil.opt.' + (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  },
+  get(k) {
+    if (this.mem.has(k)) return this.mem.get(k);
+    try { const v = sessionStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; }
+  },
+  set(k, v) {
+    this.mem.set(k, v);
+    try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {}  // 容量超過時はメモリのみ
+  },
+};
+
+/** 解析結果・ログ・進捗をクリアし、実行中なら中止する */
+function clearOptimization() {
+  optRun++;
+  if (optRunning) { cancelOpt = true; abortAnalyze(); optRunning = false; }
+  resetResults();
+  $('#opt-context').innerHTML = '';
+  $('#opt-log').textContent = '';
+  live.stop();
+  $('#opt-progress').style.width = '0';
+  $('#opt-info').textContent = '';
+  $('#btn-optimize').disabled = false; $('#btn-cancel').disabled = true;
+}
+const opponentSig = () => JSON.stringify([placement.TR, placement.BL]);
+let lastOpponentSig = null;
+
 async function optimize() {
   if (!placement.TR || !placement.BL) {
     if (!confirm('相手の右上・左下のカードが未設定です。このまま探索しますか？')) return;
   }
   const tl = candidatesFor('TL'), br = candidatesFor('BR');
   if (!tl.length || !br.length) { alert('候補カードがありません（フィルター・所持設定・手順の入力を確認してください）'); return; }
+  clearOptimization();
+  const run = optRun;
+  const alive = () => run === optRun;
+  const log = (t) => { if (alive()) logOpt(t); };
   cancelOpt = false;
+  optRunning = true;
   $('#btn-optimize').disabled = true; $('#btn-cancel').disabled = false;
   const bar = $('#opt-progress'), info = $('#opt-info');
-  // 前回の結果・ログ・進捗をクリアしてから始める
-  resetResults();
-  $('#opt-log').textContent = '';
-  live.stop();
-  bar.style.width = '0';
-  info.textContent = '';
   const t0 = performance.now();
-  const base = { TR: placement.TR, BL: placement.BL };
-  let results = [];
   try {
+    await refreshEngineInfo();
+    if (!alive()) return;
+    const desc = describeParams(tl, br);
+    showContext(desc);
+    log('入力パラメーター');
+    desc.forEach((l) => log('  ' + l));
+
+    // 同じ条件の結果があれば使いまわす
+    const cacheKey = optCache.key(optimizationParams(tl, br));
+    const hit = optCache.get(cacheKey);
+    if (hit) {
+      renderResults(hit.results, `キャッシュから表示（${hit.savedAt} の解析結果）`);
+      log(`同じ条件の解析結果があるため、キャッシュから表示しました（${hit.savedAt} 解析、${hit.count} 通り、所要 ${hit.elapsed}）`);
+      info.textContent = `${hit.count} 通り評価（キャッシュ）`;
+      bar.style.width = '100%';
+      return;
+    }
+
     const mode = $('#search-mode').value;
     const K = Math.max(1, +$('#top-k').value || 6);
-    logOpt(`最適化開始: 候補 左上 ${tl.length} / 右下 ${br.length}（反転を含む）、${$('#visits').value} visits、` +
-      (mode === 'full' ? '全探索' : `2 段階（K = ${K}）`));
+    const base = { TR: placement.TR, BL: placement.BL };
+    const ctx = { log, alive, onResult: insertResult };
+    let results = [], errors = 0;
+    log('最適化開始');
     if (mode === 'full' || (tl.length <= K && br.length <= K)) {
       const pls = [];
       for (const a of tl) for (const b of br) pls.push({ ...base, TL: a, BR: b });
-      info.textContent = `${pls.length} 通りを評価中…`;
       resetResults('全探索: 解析中（結果が届くたびに順位の位置へ追加）');
-      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ', insertResult);
+      results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ', ctx);
+      errors = results.errors || 0;
     } else {
       // 段階 1: 各隅を単独で評価（もう一方の隅は現在の選択、未選択なら空）
       const stage1 = [
@@ -870,30 +990,49 @@ async function optimize() {
       ];
       const total = stage1.length + K * K;
       resetResults('段階 1: 各隅を単独で評価中（もう一方の隅は空）');
-      const r1 = await evaluateMany(stage1, (d, n) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${n}`; }, '段階 1 ', insertResult);
+      const r1 = await evaluateMany(stage1, (d, n) => { bar.style.width = (100 * d / total) + '%'; info.textContent = `段階 1: ${d} / ${n}`; }, '段階 1 ', ctx);
+      if (!alive()) return;
       const top = (key, list) => {
         const scored = r1.filter((r) => list.some((p) => p === r.pl[key]));
         scored.sort((x, y) => y.winrateWhite - x.winrateWhite);
         return scored.slice(0, K).map((r) => r.pl[key]);
       };
       const topTL = top('TL', tl), topBR = top('BR', br);
-      if (!cancelOpt) logOpt(`段階 1 の上位: 左上 ${topTL.length} 件、右下 ${topBR.length} 件 → ${topTL.length * topBR.length} 通りを評価`);
-      const pls = [];
-      for (const a of topTL) for (const b of topBR) pls.push({ ...base, TL: a, BR: b });
-      // 段階 1 で中止した場合は段階 1 の結果をそのまま表示する
-      if (!cancelOpt) resetResults(`段階 2: 上位 ${topTL.length} × ${topBR.length} 通りの組み合わせを評価中`);
-      results = cancelOpt ? r1 : await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; }, '段階 2 ', insertResult);
+      errors = r1.errors || 0;
+      if (cancelOpt) results = r1;  // 段階 1 で中止した場合は段階 1 の結果をそのまま表示する
+      else {
+        log(`段階 1 の上位: 左上 ${topTL.length} 件、右下 ${topBR.length} 件 → ${topTL.length * topBR.length} 通りを評価`);
+        const pls = [];
+        for (const a of topTL) for (const b of topBR) pls.push({ ...base, TL: a, BR: b });
+        resetResults(`段階 2: 上位 ${topTL.length} × ${topBR.length} 通りの組み合わせを評価中`);
+        results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * (stage1.length + d) / (stage1.length + n)) + '%'; info.textContent = `段階 2: ${d} / ${n}`; }, '段階 2 ', ctx);
+        errors += results.errors || 0;
+      }
     }
+    if (!alive()) return;
+    const elapsed = fmtSec((performance.now() - t0) / 1000);
     renderResults(results, cancelOpt ? '中止（評価できた分の結果）' : '');
-    info.textContent = `${cancelOpt ? '中止: ' : ''}${results.length} 通り評価（${((performance.now() - t0) / 1000).toFixed(1)} 秒）`;
-    logOpt(`最適化${cancelOpt ? '中止' : '終了'}: 合計 ${fmtSec((performance.now() - t0) / 1000)}`);
+    info.textContent = `${cancelOpt ? '中止: ' : ''}${results.length} 通り評価（${elapsed}）`;
+    log(`最適化${cancelOpt ? '中止' : '終了'}: 合計 ${elapsed}`);
     bar.style.width = '100%';
+    // 最後まで終わってエラーも無ければキャッシュする（上位のみ保存）
+    if (!cancelOpt && !errors) {
+      optCache.set(cacheKey, {
+        savedAt: new Date().toLocaleTimeString('ja-JP', { hour12: false }), count: results.length, elapsed,
+        results: [...results].sort(compareResults).slice(0, 200).map(({ pl, winrateWhite, scoreLeadWhite, visits }) => ({ pl, winrateWhite, scoreLeadWhite, visits })),
+      });
+    }
   } catch (e) {
+    if (!alive()) return;
     info.textContent = 'エラー: ' + e.message;
-    logOpt('エラー: ' + e.message);
+    log('エラー: ' + e.message);
   } finally {
-    $('#btn-optimize').disabled = false; $('#btn-cancel').disabled = true;
+    if (alive()) { optRunning = false; $('#btn-optimize').disabled = false; $('#btn-cancel').disabled = true; }
   }
+}
+/** 最新のエンジン情報（KataGo のバージョン・モデル）を取得する */
+async function refreshEngineInfo() {
+  try { engineInfo = await api('GET', '/api/status'); } catch {}
 }
 function placementText(p) {
   if (!p) return '<span class="muted">（なし）</span>';
@@ -1111,7 +1250,7 @@ function clearPlacement(keys) {
   onPlacementChange();
 }
 $('#btn-clear-mine').onclick = () => clearPlacement(['TL', 'BR']);
-$('#btn-clear-all').onclick = () => clearPlacement(CORNER_ORDER);
+$('#btn-clear-all').onclick = () => { clearOptimization(); clearPlacement(CORNER_ORDER); };
 
 /** 現在の初期配置を SGF にする。石は AB/AW、KM はアゲハマを織り込んだ実質コミ、手番は黒 */
 function placementSgf() {

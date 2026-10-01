@@ -81,6 +81,8 @@ class KataGoEngine:
         if extra_args:
             cmd += extra_args
         log("starting:", " ".join(cmd))
+        self.model = os.path.basename(model)
+        self.version = None  # 起動確認の応答から取得
         self.proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, encoding="utf-8")
@@ -117,8 +119,10 @@ class KataGoEngine:
             except ValueError:
                 log("katago(stdout):", line)
                 continue
+            if resp.get("id") == "startup-probe":
+                self.version = resp.get("version")
             if not self.ready.is_set():
-                log("KataGo の準備ができました", resp.get("version", ""))
+                log("KataGo の準備ができました", resp.get("version", ""), f"(model: {self.model})")
             self.ready.set()
             qid = resp.get("id")
             with self.lock:
@@ -135,10 +139,11 @@ class KataGoEngine:
             q.put({"error": msg})
 
     def status(self):
+        info = {"engine": self.name, "version": self.version, "model": self.model}
         if self.proc.poll() is not None:
-            return {"engine": self.name, "ok": False, "ready": False, "message": self.error or "KataGo が起動していません"}
+            return {**info, "ok": False, "ready": False, "message": self.error or "KataGo が起動していません"}
         ready = self.ready.is_set()
-        return {"engine": self.name, "ok": True, "ready": ready,
+        return {**info, "ok": True, "ready": ready,
                 "message": "準備完了" if ready else "起動中 (モデル読み込み中)…"}
 
     def analyze(self, positions, params, on_result=None, timeout=600):
@@ -233,7 +238,8 @@ class MockEngine:
         self.delay = delay  # 1 局面あたりの疑似的な解析時間 (秒)
 
     def status(self):
-        return {"engine": self.name, "ok": True, "ready": True, "message": "モックエンジン (勝率は疑似値です)"}
+        return {"engine": self.name, "version": "mock", "model": "mock", "ok": True, "ready": True,
+                "message": "モックエンジン (勝率は疑似値です)"}
 
     def analyze(self, positions, params, on_result=None, timeout=0):
         size = params["boardSize"]
