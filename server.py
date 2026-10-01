@@ -52,6 +52,13 @@ def to_gtp(x, y, size):
     return f"{GTP_LETTERS[x]}{size - y}"
 
 
+def pos_komi(pos, params):
+    """局面ごとのコミ (アゲハマを織り込んだ値)。指定が無ければ共通のコミ。0.5 刻みに丸める。"""
+    komi = pos.get("komi")
+    komi = params["komi"] if komi is None else float(komi)
+    return max(-150.0, min(150.0, round(komi * 2) / 2))
+
+
 class KataGoEngine:
     """KataGo の analysis エンジンをサブプロセスとして常駐させる。"""
 
@@ -117,7 +124,7 @@ class KataGoEngine:
                 "message": "準備完了" if self.ready.is_set() else "起動中 (モデル読み込み中)…"}
 
     def analyze(self, positions, params, timeout=600):
-        """positions: [{"stones": [[color, x, y], ...]}] → [{"winrateWhite", "scoreLeadWhite", "visits"} | {"error"}]"""
+        """positions: [{"stones": [[color, x, y], ...], "komi"?: float}] → [{"winrateWhite", "scoreLeadWhite", "visits"} | {"error"}]"""
         if self.proc.poll() is not None:
             raise RuntimeError(self.error or "KataGo が起動していません")
         size = params["boardSize"]
@@ -134,7 +141,7 @@ class KataGoEngine:
                 "moves": [],
                 "initialPlayer": params["nextPlayer"],
                 "rules": params["rules"],
-                "komi": params["komi"],
+                "komi": pos_komi(pos, params),
                 "boardXSize": size,
                 "boardYSize": size,
                 "maxVisits": params["visits"],
@@ -184,7 +191,7 @@ class MockEngine:
                 score += value if c == "W" else -value
             h = hashlib.md5(json.dumps(sorted(pos["stones"])).encode()).digest()
             score += (h[0] / 255.0 - 0.5) * 3.0
-            score += params["komi"] - 6.5
+            score += pos_komi(pos, params) - 6.5
             if params["nextPlayer"] == "W":
                 score += 6.5
             winrate = 1.0 / (1.0 + pow(2.718281828, -score / 4.0))
@@ -207,7 +214,7 @@ class CachedEngine:
 
     @staticmethod
     def _key(pos, params):
-        payload = json.dumps([sorted(map(list, pos["stones"])), params], sort_keys=True)
+        payload = json.dumps([sorted(map(list, pos["stones"])), pos_komi(pos, params), params], sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()
 
     def analyze(self, positions, params):
