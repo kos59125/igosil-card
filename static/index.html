@@ -10,7 +10,8 @@
   --bg: #f5f3ee; --panel: #ffffff; --text: #1f2328; --muted: #6a737d; --border: #d8d4cc;
   --accent: #b5462c; --accent-2: #2f6f9f; --ok: #2e7d32; --bad: #c62828;
   --board: #dcb35c; --board-line: #5a4320;
-  --chi: #8d6e3f; --chu: #6a4fb3; --umi: #1f7fb0;
+  /* 属性色: ゲーム内カードアイコン左下の属性バッジの色 */
+  --chi: #e6c46c; --chu: #a6cf6e; --umi: #74b4d6;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -50,7 +51,7 @@ label { cursor: pointer; }
 .corner select { width: 100%; margin: 4px 0; }
 .corner option:disabled { color: #9a9a9a; background: #e4e4e4; }
 .corner input:disabled + span, .corner label:has(input:disabled) { color: var(--muted); opacity: .6; }
-.attr { display: inline-block; min-width: 1.6em; text-align: center; border-radius: 4px; color: #fff; font-size: 12px; padding: 0 4px; }
+.attr { display: inline-block; min-width: 1.6em; text-align: center; border-radius: 4px; color: #1f2328; font-weight: 600; font-size: 12px; padding: 0 4px; }
 .attr.地 { background: var(--chi); } .attr.宙 { background: var(--chu); } .attr.海 { background: var(--umi); }
 .result { display: flex; gap: 16px; align-items: baseline; margin-top: 10px; flex-wrap: wrap; }
 .big { font-size: 28px; font-weight: 700; }
@@ -830,10 +831,16 @@ async function optimize() {
   cancelOpt = false;
   $('#btn-optimize').disabled = true; $('#btn-cancel').disabled = false;
   const bar = $('#opt-progress'), info = $('#opt-info');
+  // 前回の結果・ログ・進捗をクリアしてから始める
+  lastResults = [];
+  $('#opt-results tbody').innerHTML = '';
+  $('#opt-log').textContent = '';
+  live.stop();
+  bar.style.width = '0';
+  info.textContent = '';
   const t0 = performance.now();
   const base = { TR: placement.TR, BL: placement.BL };
   let results = [];
-  $('#opt-log').textContent = '';
   try {
     const mode = $('#search-mode').value;
     const K = Math.max(1, +$('#top-k').value || 6);
@@ -1066,7 +1073,7 @@ function placementSgf() {
     return `${CORNERS[k].label}（${CORNERS[k].mine ? '白' : '黒'}）: ${c ? `${c.name}${p.flip ? '（反転）' : ''}` : 'なし'}`;
   }).join('\n');
   const pr = pos.prisoners;
-  const comment = `${desc}\nアゲハマ: 黒 ${pr.B} / 白 ${pr.W}（コミ ${KOMI} に加減済み）`;
+  const comment = `${desc}\nアゲハマ: 黒 ${pr.B} / 白 ${pr.W}（コミで調整）`;
   const ab = pts('B'), aw = pts('W');
   return `(;GM[1]FF[4]CA[UTF-8]AP[igosil-card]SZ[${N}]RU[Japanese]KM[${pos.komi}]PL[B]` +
     `${ab ? 'AB' + ab : ''}${aw ? 'AW' + aw : ''}C[${escSgf(comment)}])`;
