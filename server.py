@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.request
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -33,7 +34,6 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(ROOT, "static")
 DATA_DIR = os.path.join(ROOT, "data")
 CARDS_PATH = os.path.join(DATA_DIR, "cards.json")
-SAMPLE_CARDS_PATH = os.path.join(DATA_DIR, "cards.sample.json")
 CARD_SOURCE_URL = "https://gonote-app.com/article/TSqUCWy46aAwyoUyrix2"
 
 GTP_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ"  # I を飛ばす
@@ -243,16 +243,15 @@ TAG_RE = re.compile(r"<[^>]+>")
 
 
 def load_cards():
-    path = CARDS_PATH if os.path.exists(CARDS_PATH) else SAMPLE_CARDS_PATH
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    data["isSample"] = path == SAMPLE_CARDS_PATH
-    return data
+    if not os.path.exists(CARDS_PATH):
+        return {"cards": [], "isEmpty": True}
+    with open(CARDS_PATH, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def save_cards(data):
     os.makedirs(DATA_DIR, exist_ok=True)
-    data = {k: v for k, v in data.items() if k != "isSample"}
+    data = {k: v for k, v in data.items() if k != "isEmpty"}
     if os.path.exists(CARDS_PATH):
         shutil.copyfile(CARDS_PATH, CARDS_PATH + ".bak")
     tmp = CARDS_PATH + ".tmp"
@@ -315,10 +314,218 @@ def _info_from_lines(lines):
     return name, attr, slot
 
 
-def parse_card_page(raw):
-    """gonote の記事 (HTML / JSON 埋め込み / プレーンテキスト) から定石カードを抽出する。
+# --- SGF (分岐あり) の木構造パーサー -------------------------------------------
 
-    記事の正確な構造は未確認のため、次のヒューリスティックで抽出する:
+def parse_sgf_tree(sgf):
+    """SGF を {"props": {id: [values]}, "children": [...]} の木にする。返り値は最初のノード。"""
+    i, n = 0, len(sgf)
+
+    def skip_ws():
+        nonlocal i
+        while i < n and sgf[i].isspace():
+            i += 1
+
+    def parse_value():
+        nonlocal i
+        i += 1  # '['
+        buf = []
+        while i < n and sgf[i] != "]":
+            if sgf[i] == "\\" and i + 1 < n:
+                i += 1
+            buf.append(sgf[i])
+            i += 1
+        i += 1  # ']'
+        return "".join(buf)
+
+    def parse_node():
+        nonlocal i
+        i += 1  # ';'
+        props = {}
+        while True:
+            skip_ws()
+            m = re.match(r"[A-Za-z]+", sgf[i:i + 16]) if i < n else None
+            if not m:
+                break
+            ident = m.group(0)
+            i += len(ident)
+            vals = []
+            skip_ws()
+            while i < n and sgf[i] == "[":
+                vals.append(parse_value())
+                skip_ws()
+            props[ident] = props.get(ident, []) + vals
+        return {"props": props, "children": []}
+
+    def parse_sequence():
+        """'(' から対応する ')' まで。最初のノードを返す。"""
+        nonlocal i
+        i += 1  # '('
+        first = last = None
+        while True:
+            skip_ws()
+            if i >= n:
+                break
+            ch = sgf[i]
+            if ch == ";":
+                node = parse_node()
+                if last is None:
+                    first = node
+                else:
+                    last["children"].append(node)
+                last = node
+            elif ch == "(":
+                child = parse_sequence()
+                if child is not None:
+                    if last is None:
+                        first = last = child
+                    else:
+                        last["children"].append(child)
+            elif ch == ")":
+                i += 1
+                break
+            else:
+                i += 1
+        return first
+
+    skip_ws()
+    while i < n and sgf[i] != "(":
+        i += 1
+    return parse_sequence() if i < n else None
+
+
+def _node_moves(props):
+    moves = []
+    for key, color in (("AB", "B"), ("AW", "W"), ("B", "B"), ("W", "W")):
+        for v in props.get(key, []):
+            if len(v) == 2 and v != "tt":
+                moves.append([color, v])
+    return moves
+
+
+def _sgf_named_lines(sgf):
+    """コメント (C) が付いたノードまでの手順を [(コメント, moves), ...] で返す。"""
+    root = parse_sgf_tree(sgf)
+    out = []
+    stack = [(root, [])] if root else []
+    while stack:
+        node, path = stack.pop()
+        path = path + _node_moves(node["props"])
+        for c in node["props"].get("C", []):
+            if c.strip():
+                out.append((c.strip(), path))
+        for child in reversed(node["children"]):
+            stack.append((child, path))
+    return out
+
+
+def _norm(name):
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", name))
+
+
+def _strip_html(s):
+    return htmllib.unescape(TAG_RE.sub("", s or "")).strip()
+
+
+FOCUS_TO_HOME = {"top-right": "TR", "top-left": "TL", "bottom-right": "BR", "bottom-left": "BL"}
+
+
+def parse_gonote_article(raw):
+    """gonote の記事データ (window.__INITIAL_DATA__) から定石カードを抽出する。
+
+    記事は「見出し → カード表 (#, 定石カード名称, 属性, 配置) → 碁盤 (分岐つき SGF)」の繰り返しで、
+    SGF の各分岐の最終手にカード名がコメントとして付いている。
+    該当する構造が無ければ None を返す。
+    """
+    m = re.search(r"window\.__INITIAL_DATA__\s*=\s*(\{.*?\});?\s*</script>", raw, re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+        items = data["data"]["contentData"]["items"]
+    except (ValueError, KeyError, TypeError):
+        return None
+
+    cards, warnings = [], []
+    section, table_rows = "", []
+
+    def flush(board):
+        nonlocal table_rows
+        lines = _sgf_named_lines(board["sgf"]) if board else []
+        home = FOCUS_TO_HOME.get(((board or {}).get("settings") or {}).get("focusMode"), "")
+        used = set()
+        by_name = {}
+        for comment, moves in lines:
+            key = _norm(comment)
+            if key in by_name:
+                warnings.append(f"[{section}] SGF にコメント「{comment}」が複数あります (最初の分岐を使用)")
+                continue
+            by_name[key] = moves
+        for row in table_rows:
+            name, attr, slot = row
+            key = _norm(name)
+            moves = by_name.get(key)
+            if moves is None:  # コメントに補足が付いている場合
+                moves = next((mv for k, mv in by_name.items() if key and (key in k or k in key)), None)
+                if moves is not None:
+                    key = next(k for k, mv in by_name.items() if mv is moves)
+            if moves is None:
+                warnings.append(f"[{section}] 「{name}」の手順が SGF に見つかりません (手動で入力してください)")
+                moves = []
+            used.add(key)
+            card = {"name": name, "attr": attr, "slot": slot, "group": section, "moves": moves}
+            if home:
+                card["home"] = home
+            cards.append(card)
+        for k in by_name:
+            if k not in used:
+                warnings.append(f"[{section}] SGF の分岐「{k}」に対応するカードが表にありません")
+        table_rows = []
+
+    for it in items:
+        kind = it.get("type")
+        if kind == "text-editor":
+            h = re.search(r"<h[1-3][^>]*>(.*?)</h[1-3]>", it.get("content", ""), re.S)
+            if h:
+                if table_rows:
+                    flush(None)
+                section = _strip_html(h.group(1))
+        elif kind == "table-editor":
+            rows = (it.get("tableData") or {}).get("rows") or []
+            header = [_strip_html(c) for c in rows[0]["cells"]] if rows else []
+            try:
+                ci_name = next(i for i, h in enumerate(header) if "名" in h)
+                ci_attr = header.index("属性")
+                ci_slot = header.index("配置")
+            except (StopIteration, ValueError):
+                continue
+            for r in rows[1:]:
+                cells = [_strip_html(c) for c in r["cells"]]
+                if len(cells) <= max(ci_name, ci_attr, ci_slot) or not cells[ci_name]:
+                    continue
+                attr = cells[ci_attr] if cells[ci_attr] in ATTRS else ""
+                slot = cells[ci_slot].upper() if cells[ci_slot].upper() in ("A", "B") else ""
+                if not attr or not slot:
+                    warnings.append(f"[{section}] 「{cells[ci_name]}」の属性/配置が不明です: {cells[ci_attr]} / {cells[ci_slot]}")
+                table_rows.append((cells[ci_name], attr, slot))
+        elif kind == "go-board" and it.get("sgf"):
+            flush(it)
+    if table_rows:
+        flush(None)
+    return cards, warnings
+
+
+def parse_card_page(raw):
+    """gonote の記事 (HTML / JSON 埋め込み / プレーンテキスト) から定石カードを抽出する。"""
+    parsed = parse_gonote_article(raw)
+    if parsed and parsed[0]:
+        return parsed
+    cards, warnings = parse_card_page_heuristic(raw)
+    warnings.insert(0, "記事データの構造を認識できなかったため、推定で抽出しました。結果を確認してください。")
+    return cards, warnings
+
+
+def parse_card_page_heuristic(raw):
+    """記事の構造が変わった場合の予備。次のヒューリスティックで抽出する:
       1. ページ中の SGF 文字列を順に探し、各 SGF の直前のテキストからカード名・属性・A/B を推定
       2. SGF が無い場合、属性と A/B を含む行をカードとみなす (手順は手動入力)
     """
@@ -505,7 +712,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json({"cards": new_cards, "warnings": warnings})
         with self.cards_lock:
             data = load_cards()
-            old = [] if data.get("isSample") else data.get("cards", [])
+            old = data.get("cards", [])
             merged, added, updated, removed = merge_cards(old, new_cards)
             data = {"source": source, "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S"), "cards": merged}
             save_cards(data)

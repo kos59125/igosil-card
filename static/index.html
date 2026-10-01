@@ -142,7 +142,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 
     <div class="tab" id="tab-cards">
       <div class="row">
-        <input type="text" id="card-search" placeholder="カード名で絞り込み" style="flex:1;min-width:140px">
+        <input type="text" id="card-search" placeholder="カード名・定石グループで絞り込み" style="flex:1;min-width:140px">
         <select id="card-slot-filter"><option value="">A/B すべて</option><option>A</option><option>B</option></select>
         <button id="btn-new-card">＋ 新規カード</button>
       </div>
@@ -293,8 +293,9 @@ function playMoves(moves) {
 // ---------------------------------------------------------------------------
 // カードの配置（隅への写像と反転）
 // ---------------------------------------------------------------------------
-/** カードが描かれている隅（石の重心から判定） */
+/** カードが描かれている隅（記事の碁盤の表示位置。無ければ石の重心から判定） */
 function homeCorner(card) {
+  if (CORNERS[card.home]) return CORNERS[card.home];
   if (!card.moves.length) return { x: 1, y: card.slot === 'B' ? 1 : 0 };
   let sx = 0, sy = 0;
   for (const [, v] of card.moves) { const [x, y] = sgfToXY(v); sx += x; sy += y; }
@@ -405,8 +406,8 @@ async function loadCards() {
   cards = (data.cards || []).map((c) => ({ ...c, moves: c.moves || [] }));
   rebuildMeta();
   const st = $('#cards-status');
-  st.textContent = `カード ${activeCards().length} 枚` + (data.isSample ? '（サンプル: 「カードリスト更新」で取得してください）' : data.fetchedAt ? `（${data.fetchedAt.replace('T', ' ')} 取得）` : '');
-  st.className = 'status' + (data.isSample ? ' bad' : '');
+  st.textContent = data.isEmpty ? 'カードがありません: 「カードリスト更新」で取得してください' : `カード ${activeCards().length} 枚` + (data.fetchedAt ? `（${data.fetchedAt.replace('T', ' ')} 取得）` : '');
+  st.className = 'status' + (data.isEmpty ? ' bad' : '');
   for (const k of CORNER_ORDER) if (placement[k] && !cardById(placement[k].id)) placement[k] = null;
   renderCorners(); renderCardTable(); renderAll();
 }
@@ -677,10 +678,10 @@ $('#opt-results').addEventListener('click', (ev) => {
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function renderCardTable() {
   const q = $('#card-search').value.trim(), slot = $('#card-slot-filter').value;
-  const list = cards.filter((c) => (!q || c.name.includes(q)) && (!slot || c.slot === slot));
+  const list = cards.filter((c) => (!q || c.name.includes(q) || (c.group || '').includes(q)) && (!slot || c.slot === slot));
   $('#card-table tbody').innerHTML = list.map((c) => `<tr>
       <td><input type="checkbox" data-own="${c.id}" ${isOwned(c) ? 'checked' : ''}></td>
-      <td>${esc(c.name)}${c.retired ? ' <span class="muted">（記事から削除）</span>' : ''}${c.manual ? ' <span class="muted">（手動編集）</span>' : ''}</td>
+      <td>${esc(c.name)}${c.group ? `<div class="muted">${esc(c.group.replace(/（.*$/, ''))}</div>` : ''}${c.retired ? ' <span class="muted">（記事から削除）</span>' : ''}${c.manual ? ' <span class="muted">（手動編集）</span>' : ''}</td>
       <td>${c.attr ? `<span class="attr ${c.attr}">${c.attr}</span>` : '<span class="badc">?</span>'}</td>
       <td>${c.slot || '<span class="badc">?</span>'}</td>
       <td>${c.moves.length || '<span class="badc">未入力</span>'}</td>
