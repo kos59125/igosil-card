@@ -97,6 +97,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <button id="btn-eval" class="primary">勝率を計算</button>
       <button id="btn-clear-mine" title="左上・右下（自分）のカードを外す">自分の配置をクリア</button>
       <button id="btn-clear-all" title="4 隅すべてのカードを外す">すべてクリア</button>
+      <button id="btn-copy-sgf" title="現在の初期配置を SGF としてクリップボードにコピー（KM は実質コミ）">SGF をコピー</button>
+      <span class="muted" id="copy-note"></span>
       <label><input type="checkbox" id="auto-eval" checked> 変更時に自動計算</label>
       <label><input type="checkbox" id="show-numbers"> 手順番号を表示</label>
     </div>
@@ -1053,6 +1055,39 @@ function clearPlacement(keys) {
 }
 $('#btn-clear-mine').onclick = () => clearPlacement(['TL', 'BR']);
 $('#btn-clear-all').onclick = () => clearPlacement(CORNER_ORDER);
+
+/** 現在の初期配置を SGF にする。石は AB/AW、KM はアゲハマを織り込んだ実質コミ、手番は黒 */
+function placementSgf() {
+  const pos = buildPosition(placement);
+  const pts = (color) => pos.stones.filter(([c]) => c === color).map(([, x, y]) => `[${xyToSgf(x, y)}]`).join('');
+  const escSgf = (t) => t.replace(/\\/g, '\\\\').replace(/]/g, '\\]');
+  const desc = CORNER_ORDER.map((k) => {
+    const p = placement[k], c = p && cardById(p.id);
+    return `${CORNERS[k].label}（${CORNERS[k].mine ? '白' : '黒'}）: ${c ? `${c.name}${p.flip ? '（反転）' : ''}` : 'なし'}`;
+  }).join('\n');
+  const pr = pos.prisoners;
+  const comment = `${desc}\nアゲハマ: 黒 ${pr.B} / 白 ${pr.W}（コミ ${KOMI} に加減済み）`;
+  const ab = pts('B'), aw = pts('W');
+  return `(;GM[1]FF[4]CA[UTF-8]AP[igosil-card]SZ[${N}]RU[Japanese]KM[${pos.komi}]PL[B]` +
+    `${ab ? 'AB' + ab : ''}${aw ? 'AW' + aw : ''}C[${escSgf(comment)}])`;
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  // クリップボード API が使えない環境向け
+  const ta = Object.assign(document.createElement('textarea'), { value: text });
+  ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  const ok = document.execCommand('copy');
+  ta.remove();
+  return ok;
+}
+$('#btn-copy-sgf').onclick = async () => {
+  const sgf = placementSgf();
+  const ok = await copyText(sgf);
+  $('#copy-note').textContent = ok ? 'SGF をコピーしました' : 'コピーできませんでした';
+  if (!ok) prompt('SGF', sgf);
+  setTimeout(() => { $('#copy-note').textContent = ''; }, 3000);
+};
 $('#show-numbers').onchange = renderAll;
 $('#btn-optimize').onclick = optimize;
 // 全探索では K を使わないので隠す
