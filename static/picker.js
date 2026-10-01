@@ -4,7 +4,7 @@
 //  - 属性 ▸ 動物（定石グループ） ▸ カード の多段階の折りたたみ表示
 //  - テキストを直接入力して絞り込み（カード名・動物・属性・グループの説明に部分一致）
 //  - 属性・動物は、一覧の見出しや上部のボタンをクリックすると「チップ」として入力欄に入り、条件として絞り込める
-//    （属性は 1 つだけ選べる。動物は複数選ぶと「または」、属性・動物・入力文字どうしは「かつ」）
+//    （属性・動物はそれぞれ 1 つだけ選べる。属性・動物・入力文字どうしは「かつ」）
 //  - キーボード: ↑↓ で移動、Enter で決定、Esc で閉じる、入力が空のとき Backspace でチップを削除
 //
 // 使い方:
@@ -193,7 +193,11 @@ class CardPicker {
       const groupAttr = new Map(this._items.map((x) => [x.group, x.attr]));
       this.chips = this.chips.filter((c) => c.kind !== 'attr' && !(c.kind === 'group' && groupAttr.get(c.value) !== value));
       this.chips.unshift({ kind, value, label: value });
-    } else this.chips.push({ kind, value, label: value });
+    } else {
+      // 動物も排他（1 つだけ）
+      this.chips = this.chips.filter((c) => c.kind !== 'group');
+      this.chips.push({ kind, value, label: value });
+    }
     this.input.value = '';
     this.active = -1;
     this.renderChips(); this.renderQuick(); this.renderList();
