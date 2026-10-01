@@ -162,11 +162,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 
     <div class="tab" id="tab-settings">
       <div class="row"><label>探索数 (visits) <input type="number" id="visits" value="100" min="1" max="5000" style="width:6em"></label></div>
-      <div class="row"><label>コミ <input type="number" id="komi" value="6.5" step="0.5" style="width:5em"></label>
-        <label>ルール <select id="rules"><option value="japanese">日本ルール</option><option value="chinese">中国ルール</option><option value="tromp-taylor">Tromp-Taylor</option></select></label></div>
-      <div class="row"><label>配置後の手番 <select id="next-player"><option value="B">黒番から</option><option value="W">白番から</option></select></label></div>
-      <div class="row"><label><input type="checkbox" id="owner-colors"> カードの初手側の石を、カードを置いたプレイヤーの色にする</label></div>
-      <div class="muted">オフ: カードに描かれた石の色のまま配置します。オン: 初手の石が「置いた側」の色になるよう、白側（自分）のカードは色を入れ替えます。</div>
+      <div class="muted">対局条件（固定）: 19 路、コミ 6.5 目、日本ルール、カード配置後は黒番から。</div>
+      <div class="muted">カードは定石一覧に描かれた相手側の配置（防御時配置）として登録します。右上・左下（相手）は表示通り、左上・右下（自分・挑戦時配置）は白黒を反転して配置します。</div>
       <div class="row"><label>同時に送る局面数 <input type="number" id="batch" value="32" min="1" max="512" style="width:5em"></label></div>
       <div class="row"><label>カード取得元 URL <input type="text" id="source-url" style="width:100%" value="https://gonote-app.com/article/TSqUCWy46aAwyoUyrix2"></label></div>
     </div>
@@ -185,7 +182,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
           <button type="button" id="edit-undo">1 手戻す</button>
           <button type="button" id="edit-clear">クリア</button>
         </div>
-        <div class="muted">盤をクリックして手順通りに石を置きます（取られた石は自動で除去）。カードに描かれている隅のまま入力してください。</div>
+        <div class="muted">盤をクリックして手順通りに石を置きます（取られた石は自動で除去）。定石一覧に描かれている相手側の配置（防御時配置）を、隅・色ともそのまま入力してください。</div>
       </div>
       <div>
         <div class="row"><label style="flex:1">名前 <input type="text" id="edit-name" style="width:100%" required></label></div>
@@ -313,7 +310,8 @@ function mapPoint(x, y, home, target, flip) {
 function placedCardStones(card, cornerKey, flip) {
   const meta = cardMeta[card.id];
   const corner = CORNERS[cornerKey];
-  const swap = $('#owner-colors').checked && corner.mine === (card.moves[0]?.[0] === 'B');
+  // カードは防御時配置（相手側）で描かれているので、自分の隅（挑戦時配置）では白黒を反転する
+  const swap = corner.mine;
   const res = [];
   meta.final.board.forEach((c, i) => {
     if (!c) return;
@@ -431,9 +429,9 @@ function analysisParams() {
   return {
     boardSize: N,
     visits: +$('#visits').value || 100,
-    komi: +$('#komi').value,
-    rules: $('#rules').value,
-    nextPlayer: $('#next-player').value,
+    komi: 6.5,
+    rules: 'japanese',
+    nextPlayer: 'B',  // 配置後は常に黒番から
   };
 }
 async function analyze(positions) {
@@ -549,11 +547,13 @@ function renderMatchup() {
     const a = placement[m] && cardById(placement[m].id), b = placement[o] && cardById(placement[o].id);
     if (!a || !b) return '<td class="muted">—</td>';
     const r = relation(a.attr, b.attr);
-    return `<td class="${r > 0 ? 'good' : r < 0 ? 'badc' : 'muted'}">${r > 0 ? '有利' : r < 0 ? '不利' : '互角'}</td>`;
+    return `<td class="${r > 0 ? 'good' : r < 0 ? 'badc' : 'muted'}">${r > 0 ? '有利 +1' : r < 0 ? '不利 −1' : '0'}</td>`;
   };
+  const total = matchupScore(placement);
   $('#matchup').innerHTML = `<table class="matchup" style="margin-top:10px"><thead><tr><th>属性相性（地 &gt; 海 &gt; 宙 &gt; 地）</th><th>vs 右上</th><th>vs 左下</th></tr></thead>
     <tbody><tr><td style="text-align:left">左上</td>${cell('TL', 'TR')}${cell('TL', 'BL')}</tr>
-    <tr><td style="text-align:left">右下</td>${cell('BR', 'TR')}${cell('BR', 'BL')}</tr></tbody></table>`;
+    <tr><td style="text-align:left">右下</td>${cell('BR', 'TR')}${cell('BR', 'BL')}</tr>
+    <tr><td style="text-align:left"><b>合計</b>（有利 +1 / 同属性 0 / 不利 −1）</td><td colspan="2" class="${total > 0 ? 'good' : total < 0 ? 'badc' : 'muted'}"><b>${total > 0 ? '+' : ''}${total}</b></td></tr></tbody></table>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -825,7 +825,7 @@ $('#btn-attr-advantage').onclick = () => {
 };
 
 // 設定の保存・復元
-const SETTINGS = ['visits', 'komi', 'rules', 'next-player', 'owner-colors', 'batch', 'source-url', 'search-mode', 'top-k', 'owned-only', 'try-flip', 'auto-eval'];
+const SETTINGS = ['visits', 'batch', 'source-url', 'search-mode', 'top-k', 'owned-only', 'try-flip', 'auto-eval'];
 const saved = store.get('settings', {});
 for (const id of SETTINGS) {
   const el = document.getElementById(id);
@@ -833,8 +833,7 @@ for (const id of SETTINGS) {
   el.addEventListener('change', () => {
     saved[id] = el.type === 'checkbox' ? el.checked : el.value;
     store.set('settings', saved);
-    if (id === 'owner-colors') onPlacementChange();
-    else if (['komi', 'rules', 'next-player', 'visits'].includes(id) && $('#auto-eval').checked) evaluateCurrent();
+    if (id === 'visits' && $('#auto-eval').checked) evaluateCurrent();
   });
 }
 
