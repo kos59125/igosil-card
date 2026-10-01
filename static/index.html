@@ -719,9 +719,9 @@ function renderMatchup() {
     return `<td class="${r > 0 ? 'good' : r < 0 ? 'badc' : 'muted'}">${r > 0 ? '有利 +1' : r < 0 ? '不利 −1' : '0'}</td>`;
   };
   const total = matchupScore(placement);
-  $('#matchup').innerHTML = `<table class="matchup" style="margin-top:10px"><thead><tr><th>属性相性（地 &gt; 海 &gt; 宙 &gt; 地）</th><th>vs 右上</th><th>vs 左下</th></tr></thead>
-    <tbody><tr><td style="text-align:left">左上</td>${cell('TL', 'TR')}${cell('TL', 'BL')}</tr>
-    <tr><td style="text-align:left">右下</td>${cell('BR', 'TR')}${cell('BR', 'BL')}</tr>
+  $('#matchup').innerHTML = `<table class="matchup" style="margin-top:10px"><thead><tr><th>属性相性（地 &gt; 海 &gt; 宙 &gt; 地）</th><th>vs 右上 (A)</th><th>vs 左下 (B)</th></tr></thead>
+    <tbody><tr><td style="text-align:left">左上 (A)</td>${cell('TL', 'TR')}${cell('TL', 'BL')}</tr>
+    <tr><td style="text-align:left">右下 (B)</td>${cell('BR', 'TR')}${cell('BR', 'BL')}</tr>
     <tr><td style="text-align:left"><b>合計</b>（有利 +1 / 同属性 0 / 不利 −1）</td><td colspan="2" class="${total > 0 ? 'good' : total < 0 ? 'badc' : 'muted'}"><b>${total > 0 ? '+' : ''}${total}</b></td></tr></tbody></table>`;
 }
 
