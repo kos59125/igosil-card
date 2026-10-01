@@ -103,7 +103,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   <section class="panel">
     <div id="board-wrap"><svg id="board" viewBox="0 0 400 400" aria-label="盤面"></svg></div>
     <div class="corners" id="corners"></div>
-    <div class="muted">グレーのカード・反転は相手の配置と石が衝突するため置けません（相手の配置が優先）。</div>
+    <div class="muted">グレーのカード・反転は防御側（右上・左下）の配置と石が衝突するため、挑戦側（左上・右下）には置けません。</div>
     <div class="msg" id="placement-note"></div>
     <div class="row">
       <button id="btn-eval" class="primary">勝率を計算</button>
@@ -115,8 +115,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <label><input type="checkbox" id="show-numbers"> 手順番号を表示</label>
     </div>
     <div class="result">
-      <div><div class="muted">白（自分）の勝率</div><div class="big" id="wr">—</div></div>
-      <div><div class="muted">白の目数リード</div><div class="big" id="lead" style="font-size:20px">—</div></div>
+      <div><div class="muted" id="wr-label">白（自分）の勝率</div><div class="big" id="wr">—</div></div>
+      <div><div class="muted" id="lead-label">白の目数リード</div><div class="big" id="lead" style="font-size:20px">—</div></div>
       <div style="flex:1;min-width:140px"><div class="bar"><div id="wr-bar" style="width:50%"></div></div><div class="muted" id="eval-note"></div></div>
     </div>
     <div class="muted" id="prisoners"></div>
@@ -125,7 +125,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 
   <section class="panel">
     <div class="tabs">
-      <button data-tab="opt" class="active">最適化</button>
+      <button data-tab="opt" class="active">挑戦の最適化</button>
+      <button data-tab="def">防御の最適化</button>
       <button data-tab="cards">カード一覧</button>
       <button data-tab="settings">設定</button>
     </div>
@@ -168,6 +169,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       </div>
       <div class="muted">結果の行をクリックすると盤面に反映します。</div>
     </div>
+
+    <div class="tab" id="tab-def"></div>
 
     <div class="tab" id="tab-cards">
       <div class="row">
@@ -256,6 +259,14 @@ const CORNERS = {
   BR: { label: '右下', x: 1, y: 1, slot: 'B', mine: true },
 };
 const CORNER_ORDER = ['TL', 'TR', 'BL', 'BR'];
+/**
+ * 自分の役割。挑戦（自分 = 白、左上・右下）/ 防御（自分 = 黒、右上・左下）。
+ * 石の色と衝突ルールは役割で決まる（左上・右下 = 挑戦側 = 白・カードの白黒反転、右上・左下 = 防御側 = 黒・表示通り）。
+ * CORNERS[*].mine は「挑戦側の隅」を表す。表示上の「自分/相手」だけが役割で入れ替わる。
+ */
+let role = 'challenge';
+const isMyCorner = (key) => (role === 'challenge') === CORNERS[key].mine;
+const myColor = () => (role === 'challenge' ? 'W' : 'B');
 const KOMI = 6.5;
 const BEATS = { '地': '海', '海': '宙', '宙': '地' };  // 地 > 海 > 宙 > 地
 const BEATEN_BY = Object.fromEntries(Object.entries(BEATS).map(([a, b]) => [b, a]));
@@ -357,7 +368,11 @@ function mapPoint(x, y, home, target, flip) {
   }
   return [x, y];
 }
+const placedMemo = new Map();  // カード × 隅 × 向き → 石の一覧（カードの再読み込みでクリア）
 function placedCardStones(card, cornerKey, flip) {
+  const memoKey = `${card.id}|${cornerKey}|${flip ? 1 : 0}`;
+  const hit = placedMemo.get(memoKey);
+  if (hit) return hit;
   const meta = cardMeta[card.id];
   const corner = CORNERS[cornerKey];
   // カードは防御時配置（相手側）で描かれているので、自分の隅（挑戦時配置）では白黒を反転する
@@ -368,6 +383,7 @@ function placedCardStones(card, cornerKey, flip) {
     const [x, y] = mapPoint(i % N, Math.floor(i / N), meta.home, corner, flip);
     res.push({ c: swap ? other(c) : c, x, y, n: meta.final.order[i], corner: cornerKey });
   });
+  placedMemo.set(memoKey, res);
   return res;
 }
 /** 配置から局面を作る。重なりや呼吸点ゼロの石があれば conflict を返す */
@@ -412,7 +428,7 @@ function drawBoard(svg, stoneList, opts = {}) {
     for (const key of CORNER_ORDER) {
       const c = CORNERS[key];
       const x0 = c.x ? S / 2 : 0, y0 = c.y ? S / 2 : 0;
-      if (c.mine) parts.push(`<rect x="${x0}" y="${y0}" width="${S / 2}" height="${S / 2}" fill="#2f6f9f" opacity=".08"/>`);
+      if (isMyCorner(key)) parts.push(`<rect x="${x0}" y="${y0}" width="${S / 2}" height="${S / 2}" fill="#2f6f9f" opacity=".08"/>`);
     }
   }
   for (let i = 0; i < N; i++) {
@@ -429,7 +445,7 @@ function drawBoard(svg, stoneList, opts = {}) {
   if (opts.labels) {
     for (const key of CORNER_ORDER) {
       const c = CORNERS[key];
-      parts.push(`<text x="${c.x ? S - 6 : 6}" y="${c.y ? S - 5 : 13}" font-size="10" text-anchor="${c.x ? 'end' : 'start'}" fill="var(--board-line)">${c.label}${c.mine ? '（自分）' : '（相手）'}</text>`);
+      parts.push(`<text x="${c.x ? S - 6 : 6}" y="${c.y ? S - 5 : 13}" font-size="10" text-anchor="${c.x ? 'end' : 'start'}" fill="var(--board-line)">${c.label}${isMyCorner(key) ? '（自分）' : '（相手）'}</text>`);
     }
   }
   svg.innerHTML = parts.join('');
@@ -452,6 +468,7 @@ const activeCards = () => cards.filter((c) => !c.retired);
 
 function rebuildMeta() {
   cardMeta = {};
+  placedMemo.clear();
   for (const c of cards) {
     const moves = c.moves.map(([col, v]) => [col, ...sgfToXY(v)]);
     cardMeta[c.id] = { home: homeCorner(c), final: playMoves(moves) };
@@ -493,14 +510,21 @@ function analysisParams() {
     nextPlayer: 'B',  // 配置後は常に黒番から
   };
 }
-let analyzeAbort = null;
+const analyzeAborts = new Set();  // 「中止」で打ち切る解析（複数同時に走ることがある）
 /**
  * 局面をまとめて解析する。サーバーは 1 局面終わるごとに 1 行 (NDJSON) 返すので、
  * onEach(i, result, doneCount) で途中経過を受け取れる。中止 (abortAnalyze) すると AbortError を投げる。
  */
 async function analyze(positions, onEach, { abortable = false } = {}) {
   const ctrl = new AbortController();
-  if (abortable) analyzeAbort = ctrl;  // 最適化の「中止」で打ち切る対象
+  if (abortable) analyzeAborts.add(ctrl);  // 最適化の「中止」で打ち切る対象
+  try {
+    return await analyzeStream(positions, onEach, ctrl);
+  } finally {
+    analyzeAborts.delete(ctrl);
+  }
+}
+async function analyzeStream(positions, onEach, ctrl) {
   const res = await fetch('/api/analyze', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
     body: JSON.stringify({ ...analysisParams(), stream: true, positions: positions.map((p) => ({ stones: p.stones, komi: p.komi })) }),
@@ -530,10 +554,9 @@ async function analyze(positions, onEach, { abortable = false } = {}) {
     lines.forEach(handle);
   }
   handle(buf);
-  if (analyzeAbort === ctrl) analyzeAbort = null;
   return [...results].map((r) => r || { error: '結果がありません' });
 }
-function abortAnalyze() { analyzeAbort?.abort(); }
+function abortAnalyze() { for (const c of analyzeAborts) c.abort(); analyzeAborts.clear(); }
 let engineInfo = {};  // /api/status の内容（エンジン種別・バージョン・モデル）
 async function refreshStatus() {
   const el = $('#engine-status');
@@ -572,7 +595,7 @@ function renderCorners() {
   for (const key of ['TL', 'TR', 'BL', 'BR']) {
     const c = CORNERS[key];
     const div = document.createElement('div');
-    div.className = 'corner' + (c.mine ? ' mine' : '');
+    div.className = 'corner' + (isMyCorner(key) ? ' mine' : '');
     const opts = activeCards().filter((x) => x.slot === c.slot);
     // 属性 > 定石グループ（記事の動物名）の 2 階層。select は 1 階層しか入れ子にできないため、ラベルで表現する
     const groups = ['地', '宙', '海', ''].flatMap((a) => {
@@ -580,10 +603,10 @@ function renderCorners() {
       const names = [...new Set(inAttr.map(groupName))];
       return names.map((g) => {
         const list = inAttr.filter((x) => groupName(x) === g);
-        return `<optgroup label="${esc(`${a || '属性不明'} > ${g}`)}">${list.map((x) => `<option value="${x.id}">${esc(cardLabel(x))}${c.mine && !isOwned(x) ? ' ※未所持' : ''}</option>`).join('')}</optgroup>`;
+        return `<optgroup label="${esc(`${a || '属性不明'} > ${g}`)}">${list.map((x) => `<option value="${x.id}">${esc(cardLabel(x))}${isMyCorner(key) && !isOwned(x) ? ' ※未所持' : ''}</option>`).join('')}</optgroup>`;
       });
     }).join('');
-    div.innerHTML = `<div class="title"><span>${c.label}（${c.mine ? '自分・白' : '相手・黒'}）配置 ${c.slot}</span><span class="attr-badge"></span></div>
+    div.innerHTML = `<div class="title"><span>${c.label}（${isMyCorner(key) ? '自分' : '相手'}・${c.mine ? '白' : '黒'}）配置 ${c.slot}</span><span class="attr-badge"></span></div>
       <select data-corner="${key}"><option value="">（なし）</option>${groups}</select>
       <label><input type="checkbox" data-flip="${key}"> 反転</label>`;
     wrap.appendChild(div);
@@ -685,10 +708,19 @@ function onPlacementChange() {
   $('#placement-note').textContent = notes.join('\n');
   if ($('#auto-eval').checked) evaluateCurrent();
 }
+let lastEval = null;
+/** 勝率表示。役割に応じて自分の色（挑戦 = 白、防御 = 黒）の視点で表示する */
 function setEval(r, note) {
+  lastEval = r ? { r, note } : null;
+  const me = myColor() === 'W' ? '白' : '黒';
+  $('#wr-label').textContent = `${me}（自分）の勝率`;
+  $('#lead-label').textContent = `${me}の目数リード`;
   if (!r) { $('#wr').textContent = '—'; $('#lead').textContent = '—'; $('#wr-bar').style.width = '50%'; $('#eval-note').textContent = note || ''; return; }
-  $('#wr').textContent = (r.winrateWhite * 100).toFixed(1) + '%';
-  $('#lead').textContent = (r.scoreLeadWhite >= 0 ? '+' : '') + r.scoreLeadWhite.toFixed(1);
+  const wr = myColor() === 'W' ? r.winrateWhite : 1 - r.winrateWhite;
+  const lead = myColor() === 'W' ? r.scoreLeadWhite : -r.scoreLeadWhite;
+  $('#wr').textContent = (wr * 100).toFixed(1) + '%';
+  $('#lead').textContent = (lead >= 0 ? '+' : '') + lead.toFixed(1);
+  // バーは白の割合（左が黒・右が白の盤面イメージに合わせる）
   $('#wr-bar').style.width = (r.winrateWhite * 100).toFixed(1) + '%';
   $('#eval-note').textContent = note || `${r.visits ?? '?'} visits${r.cached ? '（キャッシュ）' : ''}`;
 }
@@ -721,16 +753,21 @@ function matchupScore(pl) {
   return s;
 }
 function renderMatchup() {
+  // 行 = 自分の隅、列 = 相手の隅（役割で入れ替わる）。自分から見て 有利 +1 / 同属性 0 / 不利 −1
+  const mine = role === 'challenge' ? ['TL', 'BR'] : ['TR', 'BL'];
+  const opp = role === 'challenge' ? ['TR', 'BL'] : ['TL', 'BR'];
+  const name = (k) => `${CORNERS[k].label} (${CORNERS[k].slot})`;
+  let total = 0;
   const cell = (m, o) => {
     const a = placement[m] && cardById(placement[m].id), b = placement[o] && cardById(placement[o].id);
     if (!a || !b) return '<td class="muted">—</td>';
     const r = relation(a.attr, b.attr);
+    total += r;
     return `<td class="${r > 0 ? 'good' : r < 0 ? 'badc' : 'muted'}">${r > 0 ? '有利 +1' : r < 0 ? '不利 −1' : '0'}</td>`;
   };
-  const total = matchupScore(placement);
-  $('#matchup').innerHTML = `<table class="matchup" style="margin-top:10px"><thead><tr><th>属性相性（地 &gt; 海 &gt; 宙 &gt; 地）</th><th>vs 右上 (A)</th><th>vs 左下 (B)</th></tr></thead>
-    <tbody><tr><td style="text-align:left">左上 (A)</td>${cell('TL', 'TR')}${cell('TL', 'BL')}</tr>
-    <tr><td style="text-align:left">右下 (B)</td>${cell('BR', 'TR')}${cell('BR', 'BL')}</tr>
+  const rows = mine.map((m) => `<tr><td style="text-align:left">${name(m)}（自分）</td>${opp.map((o) => cell(m, o)).join('')}</tr>`).join('');
+  $('#matchup').innerHTML = `<table class="matchup" style="margin-top:10px"><thead><tr><th>属性相性（地 &gt; 海 &gt; 宙 &gt; 地）</th>${opp.map((o) => `<th>vs ${name(o)}</th>`).join('')}</tr></thead>
+    <tbody>${rows}
     <tr><td style="text-align:left"><b>合計</b>（有利 +1 / 同属性 0 / 不利 −1）</td><td colspan="2" class="${total > 0 ? 'good' : total < 0 ? 'badc' : 'muted'}"><b>${total > 0 ? '+' : ''}${total}</b></td></tr></tbody></table>`;
 }
 
@@ -1242,6 +1279,15 @@ $('#import-file').onchange = async (ev) => {
 function showTab(name) {
   $$('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   $$('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
+  // 最適化タブで役割を切り替える（カード一覧・設定タブでは直前の役割のまま）
+  if (name === 'opt') setRole('challenge');
+  if (name === 'def') setRole('defense');
+}
+function setRole(r) {
+  if (role === r) return;
+  role = r;
+  renderCorners(); renderAll();
+  setEval(lastEval?.r, lastEval?.note);
 }
 $$('.tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 $('#btn-eval').onclick = evaluateCurrent;
@@ -1318,5 +1364,6 @@ refreshStatus();
 loadCards().then(() => { if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });
 </script>
+<script src="defense.js"></script>
 </body>
 </html>

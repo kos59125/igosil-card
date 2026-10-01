@@ -264,7 +264,7 @@ class MockEngine:
 
 
 class CachedEngine:
-    def __init__(self, engine, max_entries=200000):
+    def __init__(self, engine, max_entries=1000000):
         self.engine = engine
         self.cache = {}
         self.max_entries = max_entries
@@ -307,8 +307,9 @@ class CachedEngine:
                 results[i] = r
                 if "error" not in r:
                     with self.lock:
-                        if len(self.cache) > self.max_entries:
-                            self.cache.clear()
+                        # 上限を超えたら古いものから捨てる (dict は挿入順を保つ)
+                        while len(self.cache) >= self.max_entries:
+                            self.cache.pop(next(iter(self.cache)))
                         self.cache[keys[i]] = r
                 if on_result:
                     on_result(i, r)
