@@ -6,14 +6,16 @@
 // 対局ごとに A から 1 枚・B から 1 枚が独立に等確率で選ばれる（9 通り、各 1/9）。
 // 相手（挑戦側、白）は置かれたカードを見て、任意のカードから最善の応手（左上・右下）を選ぶ。
 //
-// 探索（全探索。ただし有望な組から順に評価する）
-//  1. 自分の各カードの勝率 s を 50% とする
-//  2. 自分の組（A カード × B カード × 向き）をバッグに入れ、重み s(A) × s(B) とする。
-//     向きは「両方反転なし」と「A のみ反転」の 2 通り（両方反転は相手の配置次第で同義、B のみ反転は A のみ反転と同義）
-//  3. バッグから重みつきでサンプリングし、相手の応手を全探索して最悪ケースの勝率 V を求める
-//  4. s(A) = min(s(A), V)、s(B) = min(s(B), V) としてバッグの重みを更新し、その組をバッグから取り除く
-//     （悪い結果が出たカードを含む組は後回しになる。未評価のカードは 50% のまま）
-//  5. バッグが空になるまで 3 に戻る（中止すれば評価済みの組で暫定の答えを出す。再実行で続きから）
+// 探索（有望なものから順に評価し、いつ止めても暫定の答えが出る。続ければ最終的に全探索になる）
+//  自分のカードの勝率 s（最初は 50%）と、相手の応手カード（左上・右下の候補 × 向き）の勝率 t（最初は 50%）を持つ。
+//  1 局面ごとに
+//   1. 自分の組（A × B × 向き）を重み s(A) × s(B) でサンプリング（向きは「両方反転なし」「A のみ反転」の 2 通り）
+//   2. その組に対する相手の応手（左上 × 右下）を重み t(左上) × t(右下) でサンプリング（評価済み・衝突するものは引き直し）
+//   3. 局面を評価し、組の値 V = これまでの応手の中で最も悪い黒の勝率 を更新（全応手を評価すると正確な最悪ケース）
+//   4. s(A), s(B) = min(s, 黒の勝率)（負ける応手が見つかったカードは後回し）
+//      t(左上), t(右下) = max(t, 白の勝率)（強い応手を早く見つけるため、相手のカードは最高の結果で評価）
+//  重みはカードごとの値の積なので、組み合わせ全体の表（数億通り）は持たずに、各隅を独立にサンプリングできる。
+//  評価済みかどうかは、組ごとのビットマップ（約 2 KB）で管理する。
 //
 // 3 枚 + 3 枚の選択: A・B それぞれ別カード 3 枚を選び、9 組の V の平均が最大になるものを厳密に求める。
 // 3 枚の A を固定すると B は列ごとに独立に選べるので、A の 3 枚組を全列挙すればよい。
@@ -42,7 +44,7 @@
       <label><input type="checkbox" id="def-flip" checked> 自分のカードの向き（反転）も探索</label>
     </div>
     <div class="row muted">相手の応手は、所持に関係なく全カード・両方の向きを全探索します（防御側と衝突するカード・向きは除外）。
-      自分の組は、カードの勝率（最初は 50%、評価した組の最悪ケース勝率が下回ればその値に更新）の積で重みづけして、有望な組から順に評価します。</div>
+      自分の組と相手の応手を、カードの勝率（最初は 50%）の積で重みづけして有望なものから順に評価するので、すぐに暫定の答えが出て、続けるほど正確になります（最後まで続ければ全探索）。</div>
     <div class="row muted" id="def-estimate"></div>
     <div class="row">
       <button id="def-run" class="primary">最適な防御を探す</button>
@@ -57,11 +59,11 @@
     <div id="def-best">
       <h3 id="def-sets-title">採用する 6 枚（右上 A 3 枚 + 左下 B 3 枚）の候補</h3>
       <div class="muted" id="def-sets-note"></div>
-      <div class="scroll"><table id="def-sets"><thead><tr><th>#</th><th>期待勝率（黒）</th><th>右上 (A) 3 枚</th><th>左下 (B) 3 枚</th><th>最悪の組</th></tr></thead><tbody></tbody></table></div>
+      <div class="scroll"><table id="def-sets"><thead><tr><th>#</th><th>期待勝率（黒）</th><th>右上 (A) 3 枚</th><th>左下 (B) 3 枚</th><th>最悪の組<br><span class="muted">応手の評価率</span></th></tr></thead><tbody></tbody></table></div>
       <div id="def-detail"></div>
     </div>
     <details id="def-pairs-wrap" style="margin-top:8px"><summary class="muted" id="def-pairs-summary">参考: 各組の評価（相手の最善応手に対する黒の勝率）</summary>
-      <div class="scroll"><table id="def-pairs"><thead><tr><th>#</th><th>黒勝率</th><th>右上 (A)</th><th>左下 (B)</th><th>相手の最善応手（左上 / 右下）</th></tr></thead><tbody></tbody></table></div>
+      <div class="scroll"><table id="def-pairs"><thead><tr><th>#</th><th>黒勝率</th><th>右上 (A)</th><th>左下 (B)</th><th>相手の最善応手（これまで）</th><th>評価済みの応手</th></tr></thead><tbody></tbody></table></div>
       <div class="muted">行をクリックすると、その組と相手の最善応手を盤面に反映します。</div>
     </details>`;
   const style = document.createElement('style');
@@ -145,7 +147,7 @@
     const rate = store.get(RATE_KEY, 0);
     let text = `自分の候補: 右上 (A) ${myA.length} 枚 × 左下 (B) ${myB.length} 枚 → 向き込み ${items.length} 組（両方反転なし・A のみ反転）。` +
       `相手の応手: 左上 ${oppA.length} × 右下 ${oppB.length}。全部評価すると最大 ${upper.toLocaleString()} 局面`;
-    if (rate) text += `（直近の速度 ${rate.toFixed(0)} 局面/秒で約 ${fmtSec(upper / rate)}。有望な組から評価するので、途中で中止しても暫定の答えが出ます）`;
+    if (rate) text += `（全探索は直近の速度 ${rate.toFixed(0)} 局面/秒で約 ${fmtSec(upper / rate)}。有望なものから評価するので、途中で中止しても暫定の答えが出ます）`;
     $('#def-estimate').textContent = text;
   }
   $$('.def-attr').forEach((x) => x.addEventListener('change', updateEstimate));
@@ -162,45 +164,38 @@
     render() {
       const s = this.s; if (!s) return;
       const el = (performance.now() - s.t0) / 1000;
-      const rate = s.positions && el > 0 ? s.positions / el : 0;
-      // 残りの局面数は、評価済みの組の平均局面数から見積もる
-      const avg = s.pairsEvaluated ? s.positionsDone / s.pairsEvaluated : (s.cur?.total || 0);
-      const remaining = Math.max(0, (s.cur?.total || 0) - (s.cur?.done || 0)) + avg * Math.max(0, s.items - s.pairsDone - (s.cur ? 1 : 0));
-      const parts = [`組 ${s.pairsDone} / ${s.items} 完了`, `局面 ${s.positionsDone.toLocaleString()} 評価`, `経過 ${fmtSec(el)}`];
-      if (rate) parts.push(`${rate.toFixed(1)} 局面/秒`, `全部終わるまで約 ${fmtSec(remaining / rate)}`);
+      const rate = s.evals && el > 0 ? s.evals / el : 0;
+      const parts = [`局面 ${s.evals.toLocaleString()} 評価`, `経過 ${fmtSec(el)}`,
+        `評価済みの組 ${s.touched} / ${s.items}（全応手を評価済み ${s.complete}）`,
+        `全体の ${(100 * s.done / s.upper).toFixed(3)}%`];
+      if (rate) parts.push(`${rate.toFixed(1)} 局面/秒`, `全探索の完了まで約 ${fmtSec(Math.max(0, s.upper - s.done) / rate)}`);
       else parts.push('最初の結果を待っています…');
       let text = parts.join('｜');
-      if (s.cur) text += `\n評価中: 右上 ${cardTxt(s.cur.item.a)} / 左下 ${cardTxt(s.cur.item.b)}（重み ${pct(s.cur.weight)}、${s.cur.done.toLocaleString()} / ${s.cur.total.toLocaleString()}）`;
-      if (s.best) text += `\n最良の組 ${pct(s.best.v)}  右上 ${cardTxt(s.best.a)} / 左下 ${cardTxt(s.best.b)}`;
+      if (s.best) text += `\n最良の組 ${vText(s.best)}  右上 ${cardTxt(s.best.a)} / 左下 ${cardTxt(s.best.b)}`;
       $('#def-live').textContent = text;
-      const totalEst = s.positionsDone + remaining;
-      $('#def-progress').style.width = (totalEst ? (100 * s.positionsDone / totalEst) : 0) + '%';
+      $('#def-progress').style.width = Math.min(100, 100 * s.done / s.upper) + '%';
     },
   };
 
-  // ---- 各組の表（ライブ挿入） -----------------------------------------------------
-  let pairRows = [];
+  // ---- 各組の表（参考。定期的に描き直す） -----------------------------------------------
   const PAIR_LIMIT = 200;
-  function resetPairs() { pairRows = []; $('#def-pairs tbody').innerHTML = ''; $('#def-pairs-summary').textContent = '参考: 各組の評価（相手の最善応手に対する黒の勝率）'; }
-  function pairRow(cell) {
-    const tr = document.createElement('tr');
-    tr.className = 'clickable';
-    tr.innerHTML = `<td></td><td><b>${pct(cell.v)}</b></td><td>${cardHtml(cell.a)}</td><td>${cardHtml(cell.b)}</td>
-      <td>${cell.resp ? `${cardHtml(cell.resp.TL)}<br>${cardHtml(cell.resp.BR)}` : '<span class="muted">応手なし</span>'}</td>`;
-    tr._cell = cell;
-    return tr;
-  }
-  function insertPair(cell, animate = true) {
-    let lo = 0, hi = pairRows.length;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (pairRows[m].v >= cell.v) lo = m + 1; else hi = m; }
-    pairRows.splice(lo, 0, cell);
-    if (lo >= PAIR_LIMIT) return;
+  /** 値の表示。相手の応手を全部評価していない組は「≤」（これ以上ではない＝上限）を付ける */
+  const vText = (cell) => (cell.v == null ? '—' : `${cell.complete ? '' : '≤ '}${pct(cell.v)}`);
+  const coverText = (cell) => (cell.total ? `${cell.n.toLocaleString()} / ${cell.total.toLocaleString()}` : '—');
+  function resetPairs() { $('#def-pairs tbody').innerHTML = ''; $('#def-pairs-summary').textContent = '参考: 各組の評価（相手の最善応手に対する黒の勝率）'; }
+  function renderPairs(cells) {
+    const list = [...cells.values()].filter((c) => c.v != null).sort((x, y) => y.v - x.v).slice(0, PAIR_LIMIT);
     const tb = $('#def-pairs tbody');
-    const tr = pairRow(cell);
-    if (animate) { tr.classList.add('row-new'); tr.addEventListener('animationend', () => tr.classList.remove('row-new'), { once: true }); }
-    tb.insertBefore(tr, tb.rows[lo] || null);
-    if (tb.rows.length > PAIR_LIMIT) tb.deleteRow(-1);
-    for (let i = lo; i < tb.rows.length; i++) tb.rows[i].cells[0].textContent = i + 1;
+    tb.innerHTML = '';
+    list.forEach((cell, i) => {
+      const tr = document.createElement('tr');
+      tr.className = 'clickable';
+      tr.innerHTML = `<td>${i + 1}</td><td><b>${vText(cell)}</b></td><td>${cardHtml(cell.a)}</td><td>${cardHtml(cell.b)}</td>
+        <td>${cell.resp ? `${cardHtml(cell.resp.TL)}<br>${cardHtml(cell.resp.BR)}` : '<span class="muted">応手なし</span>'}</td>
+        <td class="muted">${coverText(cell)}</td>`;
+      tr._cell = cell;
+      tb.appendChild(tr);
+    });
   }
   $('#def-pairs').addEventListener('click', (ev) => { const tr = ev.target.closest('tr'); if (tr?._cell) applyCell(tr._cell); });
 
@@ -287,10 +282,11 @@
     const { rowsA, colsB, M } = r;
     const sets = st.sets;
     $('#def-sets-title').textContent = st.provisional
-      ? `採用する 6 枚の候補（暫定: 評価済みの ${r.evaluated} / ${r.items} 組から）`
+      ? `採用する 6 枚の候補（暫定: 評価済みの ${r.evaluated} / ${r.items} 組から${r.complete != null ? `、全応手を評価済み ${r.complete} 組` : ''}）`
       : '採用する 6 枚（右上 A 3 枚 + 左下 B 3 枚）の候補';
     $('#def-sets-note').textContent = sets.length
-      ? '期待勝率 = 9 通りの組（A・B から 1 枚ずつ、各 1/9）それぞれで相手が最善の応手をしたときの黒の勝率の平均。行をクリックすると内訳を表示します。'
+      ? '期待勝率 = 9 通りの組（A・B から 1 枚ずつ、各 1/9）それぞれで相手が最善の応手をしたときの黒の勝率の平均。' +
+        '「≤」は相手の応手をまだ全部評価していない値（評価が進むと下がることがあります）。行をクリックすると内訳を表示します。'
       : (st.provisional ? 'まだ A・B それぞれ 3 枚の組がそろっていません（評価が進むと表示されます）。'
         : `A・B それぞれ ${SET_SIZE} 枚（別のカード）を選べる組み合わせがありませんでした。候補を増やしてください。`);
     const keys = new Set();
@@ -299,14 +295,20 @@
     sets.forEach((set, i) => {
       const key = setKey(set, rowsA, colsB);
       keys.add(key);
-      let worst = Infinity;
-      for (const ri of set.rows) for (const ci of set.cols) worst = Math.min(worst, M[ri][ci]);
+      let worst = Infinity, complete = true, cover = Infinity;
+      for (const ri of set.rows) for (const ci of set.cols) {
+        worst = Math.min(worst, M[ri][ci]);
+        const cell = r.lookup(rowsA[ri], colsB[ci]);
+        if (!cell?.complete) complete = false;
+        cover = Math.min(cover, cell?.complete ? 1 : (cell?.total ? cell.n / cell.total : 0));
+      }
+      const le = complete ? '' : '≤ ';
       const tr = document.createElement('tr');
       tr.className = 'clickable' + (i === st.shownSet ? ' active' : '');
-      tr.innerHTML = `<td>${i + 1}</td><td><b>${pct(set.ev)}</b></td>
+      tr.innerHTML = `<td>${i + 1}</td><td><b>${le}${pct(set.ev)}</b></td>
         <td class="cards">${set.rows.map((ri) => `<div>${cardHtml(rowsA[ri])}</div>`).join('')}</td>
         <td class="cards">${set.cols.map((ci) => `<div>${cardHtml(colsB[ci])}</div>`).join('')}</td>
-        <td>${pct(worst)}</td>`;
+        <td style="white-space:nowrap">${le}${pct(worst)}<div class="muted">${complete ? '100%' : `最低 ${(100 * cover).toFixed(cover < 0.01 ? 2 : 1)}%`}</div></td>`;
       if (!shownKeys.has(key)) { tr.classList.add('row-new'); tr.addEventListener('animationend', () => tr.classList.remove('row-new'), { once: true }); }
       tr.onclick = () => { st.shownSet = i; renderBest(); };
       tb.appendChild(tr);
@@ -326,7 +328,7 @@
       const same = cell && (cell.a.flip !== rowsA[ri].flip || cell.b.flip !== colsB[ci].flip);
       const title = cell?.resp ? `相手の最善応手: 左上 ${cardTxt(cell.resp.TL)} / 右下 ${cardTxt(cell.resp.BR)}` +
         (same ? `\n（同義の向き 右上 ${cardTxt(cell.a)} / 左下 ${cardTxt(cell.b)} で評価）` : '') : '';
-      return `<td class="cell" data-r="${ri}" data-c="${ci}" title="${esc(title)}">${pct(M[ri][ci])}</td>`;
+      return `<td class="cell" data-r="${ri}" data-c="${ci}" title="${esc(title)}">${cell ? vText(cell) : '—'}<div class="muted" style="font-weight:normal">${cell && !cell.complete ? coverText(cell) : ''}</div></td>`;
     }).join('')}</tr>`).join('');
     $('#def-detail').innerHTML = `
       <div class="muted">${st.shownSet + 1} 位の内訳: 行 = 右上 (A)、列 = 左下 (B)。各マスはその組が選ばれたときの黒の勝率（相手が最善の応手をした場合）。
@@ -344,7 +346,7 @@
     const m = buildMatrix(cand, cells);
     // 内訳を表示中の組み合わせは、順位が変わっても選んだままにする
     const prev = st.result && st.sets[st.shownSet] ? setKey(st.sets[st.shownSet], st.result.rowsA, st.result.colsB) : null;
-    st.result = { ...m, evaluated: cells.size, items };
+    st.result = { ...m, evaluated: cells.size, items, complete: [...cells.values()].filter((c) => c.complete).length };
     st.sets = bestSets(m.rowsA, m.colsB, m.M, 20);
     st.shownSet = Math.max(0, prev ? st.sets.findIndex((x) => setKey(x, m.rowsA, m.colsB) === prev) : 0);
     st.provisional = provisional;
@@ -356,7 +358,7 @@
   const sig = (p) => { const c = cardById(p.id); return [c.name, c.attr, c.slot, p.flip, c.moves]; };
   function cacheKeyOf(cand) {
     return optCache.key({
-      kind: 'defense-v2', engine: { engine: engineInfo.engine, version: engineInfo.version, model: engineInfo.model },
+      kind: 'defense-v3', engine: { engine: engineInfo.engine, version: engineInfo.version, model: engineInfo.model },
       visits: +$('#visits').value || 1, komi: KOMI, rules: 'japanese',
       items: cand.items.map((it) => [sig(it.a), sig(it.b)]), oppA: cand.oppA.map(sig), oppB: cand.oppB.map(sig),
     });
@@ -378,16 +380,18 @@
     $('#def-run').disabled = false; $('#def-cancel').disabled = true;
   }
 
-  /** 重みつきサンプリング（重み = s(A) × s(B)） */
-  function sample(bag, score) {
-    let total = 0;
-    for (const it of bag) total += score.get(it.a.id) * score.get(it.b.id);
-    let x = Math.random() * total;
-    for (let i = 0; i < bag.length; i++) {
-      x -= score.get(bag[i].a.id) * score.get(bag[i].b.id);
-      if (x <= 0) return i;
-    }
-    return bag.length - 1;
+  /** 重みの累積和と、それを使った重みつきサンプリング */
+  function cumulative(n, weightOf) {
+    const cum = new Float64Array(n);
+    let t = 0;
+    for (let i = 0; i < n; i++) { t += weightOf(i); cum[i] = t; }
+    return cum;
+  }
+  function pick(cum) {
+    const x = Math.random() * cum[cum.length - 1];
+    let lo = 0, hi = cum.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (cum[m] < x) lo = m + 1; else hi = m; }
+    return lo;
   }
 
   async function runDefense() {
@@ -400,13 +404,6 @@
     await refreshEngineInfo();
     const cacheKey = cacheKeyOf(cand);
     const saved = optCache.get(cacheKey);
-    const upper = items.length * oppA.length * oppB.length;
-    if (!saved?.complete && upper > 200000) {
-      const rate = store.get(RATE_KEY, 0);
-      const doneMsg = saved ? `\n前回中止した続き（評価済み ${saved.cells.length} / ${items.length} 組）から再開します。` : '';
-      if (!confirm(`全部評価すると最大 ${upper.toLocaleString()} 局面です` + (rate ? `（約 ${fmtSec(upper / rate)}）` : '') +
-        '。開始しますか？\n有望な組から順に評価するので、途中で中止しても評価済みの組から暫定の答えを出します。' + doneMsg)) return;
-    }
     clearDefense();
     const run = st.run;
     const alive = () => run === st.run;
@@ -414,140 +411,184 @@
     st.running = true; st.cancel = false;
     $('#def-run').disabled = true; $('#def-cancel').disabled = false;
 
+    const nC = oppA.length, nD = oppB.length;
+    const upper = items.length * nC * nD;
     const ctxLines = [
       `自分（防御・黒）の候補: 右上 (A) ${myA.length} 枚・左下 (B) ${myB.length} 枚（向き込み ${items.length} 組: 両方反転なし・A のみ反転）`,
       `条件: 属性 ${$$('.def-attr').filter((x) => x.checked).map((x) => x.value).join('・') || 'なし'} / ${$('#def-owned').checked ? '所持カードのみ' : '未所持も含む'} / ${cand.flip ? '向きも探索' : '向きは表示通り'}`,
-      `相手（挑戦・白）の応手: 全カード 左上 ${oppA.length} × 右下 ${oppB.length}（向き込み）を全探索`,
+      `相手（挑戦・白）の応手: 全カード 左上 ${nC} × 右下 ${nD}（向き込み）から、有望な応手を重みつきで順に評価（全部で最大 ${upper.toLocaleString()} 局面）`,
       `エンジン: ${engineText()} / ${+$('#visits').value || 1} visits / コミ ${KOMI}（アゲハマで調整）・日本ルール / 選択確率 A・B 独立に各 1/${SET_SIZE}`,
     ];
-    $('#def-context').innerHTML = ctxLines.map((l, i) => (i === 0 ? `<b>${esc(l)}</b>` : `<div class="muted">${esc(l)}</div>`)).join('');
+    $('#def-context').innerHTML = ctxLines.map((l, k) => (k === 0 ? `<b>${esc(l)}</b>` : `<div class="muted">${esc(l)}</div>`)).join('');
     log('入力パラメーター', run);
     ctxLines.forEach((l) => log('  ' + l, run));
 
-    // カードの勝率（重み）と評価済みの組
-    const score = new Map([...myA, ...myB].map((c) => [c.id, INITIAL_SCORE]));
-    const cells = new Map();
-    const record = (cell, animate) => {
-      cells.set(cellKey(cell.a, cell.b), cell);
-      if (cell.v != null) {
-        insertPair(cell, animate);
-        score.set(cell.a.id, Math.min(score.get(cell.a.id), cell.v));
-        score.set(cell.b.id, Math.min(score.get(cell.b.id), cell.v));
-      }
+    // 自分の組。評価済みの応手はビットマップで管理（組ごとに 左上 × 右下 ビット）
+    const pairs = items.map((it) => ({ a: it.a, b: it.b, key: cellKey(it.a, it.b), prepared: false, tls: null, brs: null,
+      total: 0, n: 0, seen: null, best: null, complete: false }));
+    const pairByKey = new Map(pairs.map((p) => [p.key, p]));
+    // カードの勝率: 自分 = s（min で更新）、相手の応手 = t（max で更新）
+    const sMine = new Map([...myA, ...myB].map((c) => [c.id, INITIAL_SCORE]));
+    const tTL = new Float64Array(nC).fill(INITIAL_SCORE), tBR = new Float64Array(nD).fill(INITIAL_SCORE);
+    const L = { evals: 0, done: 0, upper, items: pairs.length, touched: 0, complete: 0, best: null };
+    const updateBest = (p) => {
+      const v = p.best?.x;
+      if (v != null && (!L.best || v > L.best.v || L.best.key === p.key)) L.best = { ...cellOf(p), key: p.key };
     };
+    const cellOf = (p) => ({ a: p.a, b: p.b, v: p.best ? p.best.x : null, lead: p.best ? p.best.lead : null,
+      resp: p.best ? { TL: p.best.TL, BR: p.best.BR } : null, n: p.n, total: p.total, complete: p.complete });
+    const cells = () => new Map(pairs.filter((p) => p.best).map((p) => [p.key, cellOf(p)]));
+
+    // 前回の続き: 組の値（これまでの最悪ケース）と、全応手を評価済みの組を引き継ぐ
     if (saved) {
-      for (const c of saved.cells) record(c, false);
-      log(saved.complete
-        ? `同じ条件の解析結果があるため、キャッシュから表示しました（${saved.savedAt} 解析、${saved.cells.length} 組）`
-        : `前回中止した続きから再開します（評価済み ${saved.cells.length} / ${items.length} 組）`, run);
+      for (const c of saved.cells) {
+        const p = pairByKey.get(cellKey(c.a, c.b));
+        if (!p || c.v == null) continue;
+        p.best = { x: c.v, lead: c.lead, TL: c.resp?.TL, BR: c.resp?.BR };
+        if (c.complete) { p.complete = true; p.n = p.total = c.total || 0; L.complete++; }
+        L.touched++;
+        sMine.set(p.a.id, Math.min(sMine.get(p.a.id), c.v));
+        sMine.set(p.b.id, Math.min(sMine.get(p.b.id), c.v));
+        updateBest(p);
+      }
+      log(`前回の続きから再開します（評価済みの組 ${L.touched}、全応手を評価済み ${L.complete}）`, run);
     }
-    const bag = items.filter((it) => !cells.has(cellKey(it.a, it.b)));
-    const save = (complete) => optCache.set(cacheKey, {
-      complete, savedAt: new Date().toLocaleTimeString('ja-JP', { hour12: false }), cells: [...cells.values()],
+    const save = () => optCache.set(cacheKey, {
+      savedAt: new Date().toLocaleTimeString('ja-JP', { hour12: false }),
+      cells: pairs.filter((p) => p.best).map((p) => { const c = cellOf(p); return { a: c.a, b: c.b, v: c.v, lead: c.lead, resp: c.resp, complete: c.complete, total: c.total }; }),
     });
 
-    const L = { items: items.length, pairsDone: cells.size, pairsEvaluated: 0, positions: 0, positionsDone: 0, best: null, cur: null };
-    for (const c of cells.values()) if (c.v != null && (!L.best || c.v > L.best.v)) L.best = c;
-    const t0 = performance.now();
-    let errors = 0, lastProvisional = performance.now();
-    if (bag.length) {
-      live.start(L);
-      log(`開始: 残り ${bag.length} 組、相手の応手は最大 ${oppA.length * oppB.length} 通り / 組`, run);
-    }
-
-    /** 1 組について相手の応手を全探索し、最悪ケース（相手の最善応手）を返す。中止したら null */
-    const evalPair = async (item, weight) => {
-      const base = { TR: item.a, BL: item.b, TL: null, BR: null };
-      let tls = [], brs = [];
-      if (!buildPosition(base).conflicts.length) {
-        tls = oppA.filter((x) => !buildPosition({ ...base, TL: x }).conflicts.length);
-        brs = oppB.filter((x) => !buildPosition({ ...base, BR: x }).conflicts.length);
+    /** 組の準備: 防御側と衝突しない応手だけに絞る */
+    const prepare = (p) => {
+      p.prepared = true;
+      const base = { TR: p.a, BL: p.b, TL: null, BR: null };
+      if (buildPosition(base).conflicts.length) { p.tls = []; p.brs = []; }
+      else {
+        p.tls = []; p.brs = [];
+        oppA.forEach((x, k) => { if (!buildPosition({ ...base, TL: x }).conflicts.length) p.tls.push(k); });
+        oppB.forEach((x, k) => { if (!buildPosition({ ...base, BR: x }).conflicts.length) p.brs.push(k); });
       }
-      const cur = { item, weight, total: tls.length * brs.length, done: 0, best: null };
-      L.cur = cur;
-      let ji = 0;
-      const next = () => {
-        const size = Math.max(1, +$('#batch').value || 32);
-        const batch = [];
-        while (batch.length < size && ji < cur.total) {
-          const tl = tls[Math.floor(ji / brs.length)], br = brs[ji % brs.length];
-          ji++;
-          const pl = { ...base, TL: tl, BR: br };
-          const pos = buildPosition(pl);
-          if (pos.conflicts.length) { cur.done++; L.positionsDone++; continue; }  // 左上と右下どうしの衝突
-          batch.push({ pl, pos });
-        }
-        return batch;
+      p.total = p.tls.length * p.brs.length;
+      p.seen = new Uint8Array(Math.ceil((nC * nD) / 8));
+      if (!p.total) p.complete = true;
+    };
+    const finishOne = (p) => {
+      p.n++; L.done++;
+      if (p.n >= p.total && !p.complete) { p.complete = true; L.complete++; }
+    };
+    /** 組 p に対する相手の応手を 1 つサンプリング（評価済み・予約済みと、左上・右下の衝突は除く） */
+    const sampleReply = (p) => {
+      const tryIdx = (ci, di) => {
+        const bit = ci * nD + di;
+        if (p.seen[bit >> 3] & (1 << (bit & 7))) return null;
+        p.seen[bit >> 3] |= 1 << (bit & 7);
+        const pl = { TR: p.a, BL: p.b, TL: oppA[ci], BR: oppB[di] };
+        const pos = buildPosition(pl);
+        if (pos.conflicts.length) { finishOne(p); return null; }  // 左上と右下どうしの衝突
+        return { p, ci, di, pl, pos };
       };
-      const worker = async () => {
-        while (!stopped()) {
-          const batch = next();
-          if (!batch.length) return;
-          try {
-            await analyze(batch.map((j) => j.pos), (i, r) => {
-              if (!alive()) return;
-              cur.done++; L.positionsDone++;
-              if (r.error) { errors++; return; }
-              L.positions++;
-              if (!cur.best || r.winrateWhite > cur.best.w) cur.best = { w: r.winrateWhite, lead: r.scoreLeadWhite, TL: batch[i].pl.TL, BR: batch[i].pl.BR };
-            }, { abortable: true });
-          } catch (e) {
-            if (e.name === 'AbortError') return;
-            throw e;
-          }
-        }
-      };
-      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-      if (stopped() && cur.done < cur.total) return null;
-      const b = cur.best;
-      return { a: item.a, b: item.b, v: b ? 1 - b.w : null, lead: b ? -b.lead : null, resp: b ? { TL: b.TL, BR: b.BR } : null };
+      const cumC = cumulative(p.tls.length, (k) => tTL[p.tls[k]]);
+      const cumD = cumulative(p.brs.length, (k) => tBR[p.brs[k]]);
+      for (let attempt = 0; attempt < 30 && !p.complete; attempt++) {
+        const job = tryIdx(p.tls[pick(cumC)], p.brs[pick(cumD)]);
+        if (job) return job;
+      }
+      // 評価済みが多くて引き直しが続くときは、残りを順に探す
+      for (const ci of p.tls) for (const di of p.brs) {
+        if (p.complete) return null;
+        const job = tryIdx(ci, di);
+        if (job) return job;
+      }
+      return null;  // 残りはすべて評価中（結果待ち）
+    };
+    let open = pairs.filter((p) => !p.complete);
+    const nextBatch = () => {
+      const size = Math.max(1, +$('#batch').value || 32);
+      const batch = [];
+      open = open.filter((p) => !p.complete);
+      if (!open.length) return batch;
+      const cum = cumulative(open.length, (k) => sMine.get(open[k].a.id) * sMine.get(open[k].b.id));
+      for (let guard = 0; batch.length < size && guard < size * 4; guard++) {
+        const p = open[pick(cum)];
+        if (p.complete) continue;
+        if (!p.prepared) { prepare(p); if (p.complete) continue; }
+        const job = sampleReply(p);
+        if (job) batch.push(job);
+      }
+      return batch;
+    };
+    const onResult = (job, r) => {
+      const { p } = job;
+      finishOne(p);
+      if (r.error) { errors++; return; }
+      L.evals++;
+      const x = 1 - r.winrateWhite;
+      if (!p.best) L.touched++;
+      if (!p.best || x < p.best.x) p.best = { x, lead: -r.scoreLeadWhite, TL: job.pl.TL, BR: job.pl.BR };
+      sMine.set(p.a.id, Math.min(sMine.get(p.a.id), x));
+      sMine.set(p.b.id, Math.min(sMine.get(p.b.id), x));
+      tTL[job.ci] = Math.max(tTL[job.ci], r.winrateWhite);
+      tBR[job.di] = Math.max(tBR[job.di], r.winrateWhite);
+      updateBest(p);
     };
 
-    try {
-      while (bag.length && !stopped()) {
-        const i = sample(bag, score);
-        const item = bag[i];
-        const weight = score.get(item.a.id) * score.get(item.b.id);
-        const cell = await evalPair(item, weight);
-        if (!cell) break;
-        bag.splice(i, 1);
-        L.pairsDone++; L.pairsEvaluated++; L.cur = null;
-        record(cell, true);
-        if (cell.v != null && (!L.best || cell.v > L.best.v)) L.best = cell;
-        log(`組 ${L.pairsDone}/${L.items}: 右上 ${cardTxt(item.a)} / 左下 ${cardTxt(item.b)} → ${pct(cell.v)}（重み ${pct(weight)}）` +
-          (cell.resp ? ` 相手の最善応手 左上 ${cardTxt(cell.resp.TL)} / 右下 ${cardTxt(cell.resp.BR)}` : ''), run);
-        if (L.pairsEvaluated % 10 === 0) save(false);
-        if (performance.now() - lastProvisional > PROVISIONAL_EVERY) {
-          lastProvisional = performance.now();
-          computeSets(cand, cells, { provisional: true, items: items.length });
+    let errors = 0;
+    const t0 = performance.now();
+    let lastPairs = 0, lastSets = 0, lastSave = performance.now();
+    const refresh = (force = false) => {
+      const now = performance.now();
+      if (force || now - lastPairs > 2000) { lastPairs = now; renderPairs(cells()); }
+      if (force || now - lastSets > PROVISIONAL_EVERY) { lastSets = now; computeSets(cand, cells(), { provisional: true, items: items.length }); }
+      if (now - lastSave > 30000) { lastSave = now; save(); }
+    };
+    live.start(L);
+    log(`開始: 自分の組 ${pairs.length}、相手の応手は 1 組あたり最大 ${(nC * nD).toLocaleString()} 通り。有望な組・応手から順に評価します`, run);
+
+    const worker = async () => {
+      while (!stopped()) {
+        const batch = nextBatch();
+        if (!batch.length) {
+          if (!open.length) return;
+          await new Promise((res) => setTimeout(res, 50));  // 残りは他のバッチの結果待ち
+          continue;
         }
+        try {
+          await analyze(batch.map((j) => j.pos), (k, r) => { if (alive()) onResult(batch[k], r); }, { abortable: true });
+        } catch (e) {
+          if (e.name === 'AbortError') return;
+          throw e;
+        }
+        if (alive()) refresh();
       }
+    };
+    try {
+      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
       if (!alive()) return;
       live.stop();
       const sec = (performance.now() - t0) / 1000;
-      if (L.positions && sec > 1) store.set(RATE_KEY, L.positions / sec);
-      const complete = !bag.length;
-      if (L.pairsEvaluated) save(complete && !errors);
+      if (L.evals && sec > 1) store.set(RATE_KEY, L.evals / sec);
+      save();
+      const all = !open.length;
       const elapsed = fmtSec(sec);
-      $('#def-info').textContent = `${complete ? '' : '中止: '}${L.pairsDone} / ${L.items} 組${L.pairsEvaluated ? `（今回 ${L.positionsDone.toLocaleString()} 局面、${elapsed}）` : '（キャッシュ）'}`;
-      if (L.pairsEvaluated) log(`${complete ? '完了' : '中止'}: ${L.pairsDone} / ${L.items} 組、今回 ${L.positionsDone.toLocaleString()} 局面、${elapsed}${errors ? `、エラー ${errors} 件` : ''}`, run);
-      if (!complete) log('同じ条件で再実行すると、続きから評価します。', run);
-      $('#def-progress').style.width = (100 * L.pairsDone / L.items) + '%';
-      $('#def-pairs-summary').textContent = `参考: 各組の評価（相手の最善応手に対する黒の勝率、${cells.size} / ${L.items} 組）`;
-      const ms = computeSets(cand, cells, { provisional: !complete, items: items.length });
-      log(`組み合わせの選択: 評価済みの ${cells.size} 組から A・B 3 枚ずつを厳密に探索（${fmtSec(ms / 1000)}）`, run);
+      $('#def-info').textContent = `${all ? '全探索完了' : '中止'}: 評価済みの組 ${L.touched} / ${L.items}（全応手を評価済み ${L.complete}）、今回 ${L.evals.toLocaleString()} 局面、${elapsed}`;
+      log(`${all ? '全探索完了' : '中止'}: 評価済みの組 ${L.touched} / ${L.items}、全応手を評価済み ${L.complete}、今回 ${L.evals.toLocaleString()} 局面、${elapsed}${errors ? `、エラー ${errors} 件` : ''}`, run);
+      if (!all) log('同じ条件で再実行すると、これまでの結果を引き継いで続けます。', run);
+      $('#def-pairs-summary').textContent = `参考: 各組の評価（相手の最善応手に対する黒の勝率、評価済み ${L.touched} / ${L.items} 組）`;
+      renderPairs(cells());
+      const ms = computeSets(cand, cells(), { provisional: !all, items: items.length });
+      log(`組み合わせの選択: 評価済みの ${L.touched} 組から A・B 3 枚ずつを厳密に探索（${fmtSec(ms / 1000)}）`, run);
       if (st.sets.length) {
-        const s = st.sets[0], { rowsA, colsB } = st.result;
-        log(`${complete ? '最適な防御' : '暫定の最適な防御'}: 期待勝率 ${pct(s.ev)}`, run);
-        log(`  右上 (A): ${s.rows.map((ri) => cardTxt(rowsA[ri])).join('、')}`, run);
-        log(`  左下 (B): ${s.cols.map((ci) => cardTxt(colsB[ci])).join('、')}`, run);
+        const top = st.sets[0], { rowsA, colsB } = st.result;
+        log(`${all ? '最適な防御' : '暫定の最適な防御'}: 期待勝率 ${all ? '' : '≤ '}${pct(top.ev)}`, run);
+        log(`  右上 (A): ${top.rows.map((ri) => cardTxt(rowsA[ri])).join('、')}`, run);
+        log(`  左下 (B): ${top.cols.map((ci) => cardTxt(colsB[ci])).join('、')}`, run);
       }
     } catch (e) {
       if (!alive()) return;
       live.stop();
       $('#def-info').textContent = 'エラー: ' + e.message;
       log('エラー: ' + e.message, run);
-      if (L.pairsEvaluated) save(false);
+      save();
     } finally {
       if (alive()) { st.running = false; $('#def-run').disabled = false; $('#def-cancel').disabled = true; }
     }
