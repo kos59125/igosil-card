@@ -445,7 +445,7 @@ function drawBoard(svg, stoneList, opts = {}) {
   if (opts.labels) {
     for (const key of CORNER_ORDER) {
       const c = CORNERS[key];
-      parts.push(`<text x="${c.x ? S - 6 : 6}" y="${c.y ? S - 5 : 13}" font-size="10" text-anchor="${c.x ? 'end' : 'start'}" fill="var(--board-line)">${c.label}${isMyCorner(key) ? '（自分）' : '（相手）'}</text>`);
+      parts.push(`<text x="${c.x ? S - 6 : 6}" y="${c.y ? S - 5 : 13}" font-size="10" text-anchor="${c.x ? 'end' : 'start'}" fill="var(--board-line)">${isMyCorner(key) ? '自分' : '相手'} ${c.slot}</text>`);
     }
   }
   svg.innerHTML = parts.join('');
