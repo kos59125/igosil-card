@@ -14,19 +14,119 @@
 
 ブラウザから KataGo を直接動かせないことと、記事ページを CORS 制約なしで取得するため、小さな Python サーバーを挟んでいます。
 
-## 起動
+## 導入と起動
 
-1. [KataGo](https://github.com/lightvector/KataGo/releases) とモデル（例: `kata1-b18c384nbt-*.bin.gz`）を用意
-2. サーバーを起動
+必要なものは **Python 3.8 以上**（追加パッケージ不要）と **KataGo（実行ファイル + ネットワーク）** の 2 つです。
 
-   ```sh
-   python3 server.py --katago /path/to/katago --model /path/to/model.bin.gz
-   # または環境変数 KATAGO_PATH / KATAGO_MODEL / KATAGO_CONFIG
+### 1. KataGo の導入
+
+KataGo は「実行ファイル」と「ネットワーク（学習済みモデル、`.bin.gz`）」を別々に入手します。
+
+#### 実行ファイル
+
+[KataGo の GitHub Releases](https://github.com/lightvector/KataGo/releases) から、OS とハードウェアに合った zip をダウンロードして任意のフォルダ（例: `C:\KataGo`）に展開します。
+Windows 用の zip はファイル名に `windows` と、使うバックエンド名（`opencl` / `cuda` / `trt` / `eigen`）が入っています。
+
+| 環境 | 選ぶバックエンド | 備考 |
+|---|---|---|
+| NVIDIA の GPU | CUDA（または OpenCL） | CUDA 版は CUDA Toolkit と cuDNN（9.8 以上推奨）の導入が必要。追加導入なしで動かしたい場合は OpenCL 版 |
+| AMD / Intel の GPU | OpenCL | 最新リリースが NVIDIA 向けのみの場合は、リリースノートの案内に従い一つ前のリリースを使う |
+| GPU なし | Eigen AVX2（古い CPU なら Eigen） | CPU のみ。解析は遅くなるので visits は 1 のままを推奨 |
+
+- OpenCL 版は**初回起動時に GPU のチューニング**が自動で走り、数分かかることがあります（その間、画面上部のバッジは黄色の「起動中」のままです）。
+- CUDA 版で `cudnn64_*.dll` などが見つからないエラーが出る場合は、CUDA / cuDNN が未導入か PATH に入っていません。OpenCL 版に切り替えるのが手軽です。
+
+#### ネットワーク
+
+[KataGo のネットワーク一覧（katagotraining.org/networks）](https://katagotraining.org/networks/) から **「Network File」**（`.bin.gz`）をダウンロードし、KataGo と同じフォルダなどに置きます。
+
+- GPU（特に CUDA）がある場合: ページ上部の「strongest confidently-rated network」で問題ありません。
+- CPU（Eigen）や非力な GPU の場合: 最新の大型ネットワークは重いので、一覧から **`b18c384nbt`** の付いたネットワーク（`kata1-b18c384nbt-s….bin.gz`）など軽めのものを選ぶと速く動きます。
+- このツールは大量の局面を 1 visit 程度で評価するため、強さより速さを優先したネットワークでも十分実用になります。
+
+#### 設定（任意）
+
+同梱の `analysis.cfg` は最小設定です。性能に合わせて次の値を調整できます。
+
+- `numAnalysisThreads`: 同時に解析する局面数。GPU なら 8〜32、CPU なら CPU コア数程度
+- `numSearchThreadsPerAnalysisThread`: 1 局面あたりの探索スレッド数。visits が 1〜数十なら 1〜2 で十分
+- `nnMaxBatchSize`: GPU 向け。`numAnalysisThreads × numSearchThreadsPerAnalysisThread` 以上にする
+
+### 2. 起動（Windows / PowerShell）
+
+1. **Python を入れる**（未導入の場合）
+
+   ```powershell
+   winget install Python.Python.3.14
    ```
 
-3. ブラウザで http://127.0.0.1:8765/ を開く
+   [python.org](https://www.python.org/downloads/windows/) のインストーラーでも構いません（その場合は「Add python.exe to PATH」にチェック）。
+   インストール後は **PowerShell を開き直して**から確認します。
 
-KataGo なしで画面だけ試す場合は `python3 server.py --mock`（勝率は疑似値。`--mock-delay 0.05` で 1 局面あたりの解析時間を擬似的に遅くできます）。
+   ```powershell
+   py --version
+   ```
+
+   - Windows では `python3` ではなく **`py`**（または `python`）を使います。
+   - `python` と打つと Microsoft Store が開く場合は、「設定 → アプリ → アプリの詳細設定 → アプリ実行エイリアス」で「python.exe」「python3.exe」をオフにします。
+
+2. **このツールを入手する**
+
+   ```powershell
+   git clone https://github.com/kos59125/igosil-card.git C:\igosil-card
+   ```
+
+   Git が無い場合は `winget install Git.Git` で入れるか、GitHub の「Code → Download ZIP」で取得して展開します。
+
+3. **起動する**（パスとネットワークのファイル名は、実際に置いた場所・ダウンロードしたファイル名に合わせて変更）
+
+   ```powershell
+   cd C:\igosil-card
+   py server.py --katago C:\KataGo\katago.exe --model C:\KataGo\kata1-b18c384nbt.bin.gz
+   ```
+
+   毎回パスを書くのが面倒な場合は環境変数でも指定できます。
+
+   ```powershell
+   $env:KATAGO_PATH  = "C:\KataGo\katago.exe"
+   $env:KATAGO_MODEL = "C:\KataGo\kata1-b18c384nbt.bin.gz"
+   py server.py
+   ```
+
+   - パスに空白を含む場合は `"C:\Program Files\KataGo\katago.exe"` のように引用符で囲みます。
+   - 環境変数をずっと使いたい場合は `[Environment]::SetEnvironmentVariable("KATAGO_PATH", "C:\KataGo\katago.exe", "User")` で保存できます（新しい PowerShell から有効）。
+
+4. ブラウザで http://127.0.0.1:8765/ を開きます。画面上部のバッジが緑の「準備完了」になれば使えます。
+5. 終了は PowerShell で `Ctrl + C`。
+
+### 3. 起動（macOS / Linux）
+
+```sh
+# macOS は Homebrew でも KataGo を入れられます: brew install katago
+python3 server.py --katago /path/to/katago --model /path/to/model.bin.gz
+# または環境変数 KATAGO_PATH / KATAGO_MODEL / KATAGO_CONFIG
+```
+
+ブラウザで http://127.0.0.1:8765/ を開きます。
+
+### KataGo なしで試す
+
+画面だけ確認したい場合は KataGo 不要のモックで起動できます（勝率は疑似値）。
+
+```sh
+py server.py --mock        # Windows
+python3 server.py --mock   # macOS / Linux
+```
+
+`--mock-delay 0.05` を付けると 1 局面あたりの解析時間を擬似的に遅くできます。
+
+### その他のオプション
+
+| オプション | 既定値 | 内容 |
+|---|---|---|
+| `--port` | 8765 | 待ち受けポート |
+| `--host` | 127.0.0.1 | 待ち受けアドレス（自分の PC からのみアクセス可能） |
+| `--config` | `analysis.cfg` | KataGo の設定ファイル（環境変数 `KATAGO_CONFIG` でも指定可） |
 
 ## 使い方
 
