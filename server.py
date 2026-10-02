@@ -794,8 +794,10 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
 
     def log_message(self, fmt, *args):
-        if "/api/analyze" not in (args[0] if args else ""):
-            log(self.address_string(), fmt % args)
+        # args の先頭はリクエスト行のことも、エラー時の HTTPStatus のこともあるので文字列にしてから判定する
+        msg = fmt % args
+        if "/api/analyze" not in msg:
+            log(self.address_string(), msg)
 
     def _json(self, obj, status=HTTPStatus.OK):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
