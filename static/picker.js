@@ -10,7 +10,8 @@
 // 使い方:
 //   const p = new CardPicker({ getItems, onChange, placeholder });
 //   container.appendChild(p.el); p.value = 'cardId';
-//   getItems() は開いたときに呼ばれ、[{ id, attr, group, groupLabel, name, note, disabled, title }] を返す
+//   getItems() は開いたときに呼ばれ、[{ id, attr, group, groupLabel, name, rank, note, disabled, title }] を返す
+//   rank（1〜5）があるカードがあれば、ランクでも絞り込める（★N ちょうど、または「以上」で ★N 以上）
 //   describe(id) は閉じているときの表示用に { attr, group, name } を返す
 //
 // 絞り込み専用（mode: 'filter'）: カードを 1 枚選ぶのではなく、属性・動物・カードのチップと入力文字を条件として持つ。
@@ -26,7 +27,8 @@ class CardPicker {
     this.describe = describe;  // id → { attr, group, name }（閉じているときの表示用。軽い処理で済ませる）
     this.onChange = onChange;
     this.noneLabel = noneLabel;
-    this.chips = [];          // [{ kind: 'attr' | 'group' | 'card', value, label }]
+    this.chips = [];          // [{ kind: 'attr' | 'group' | 'card' | 'rank', value, label, op }]
+    this.rankGe = false;       // ランクの条件を「以上」にするか
     this.collapsed = new Set(); // 折りたたんだ見出し（"attr:地" / "group:地|ウサギ"）
     this._value = null;
     this._items = [];
@@ -141,10 +143,11 @@ class CardPicker {
       if (c.kind === 'attr' && x.attr !== c.value) return false;
       if (c.kind === 'group' && x.group !== c.value) return false;
       if (c.kind === 'card' && x.id !== c.value) return false;
+      if (c.kind === 'rank' && !CardPicker.rankOk(x.rank, c)) return false;
     }
     const words = norm(this.input.value).split(/\s+/).filter(Boolean);
     if (!words.length) return true;
-    const hay = norm(`${x.attr} ${x.group} ${x.groupLabel || ''} ${x.name}`);
+    const hay = norm(`${x.attr} ${x.group} ${x.groupLabel || ''} ${x.name} ${x.rank ? '★' + x.rank : ''}`);
     return words.every((w) => hay.includes(w));
   }
   /** 絞り込み専用: すべての条件を外す */
@@ -204,7 +207,10 @@ class CardPicker {
     const on = (kind, value) => this.chips.some((c) => c.kind === kind && c.value === value);
     this.el.querySelector('.cp-quick').innerHTML =
       `<div><span class="cp-muted">属性:</span> ${attrs.map((a) => `<span class="cp-q${on('attr', a) ? ' on' : ''}" data-kind="attr" data-value="${CardPicker.esc(a)}">${CardPicker.badge(a)}</span>`).join(' ')}</div>
-       <div><span class="cp-muted">動物:</span> ${groups.map(([g, a]) => `<span class="cp-q cp-qg${on('group', g) ? ' on' : ''}" data-kind="group" data-value="${CardPicker.esc(g)}" title="${CardPicker.esc(a || '')}">${CardPicker.esc(g)}</span>`).join('')}</div>`;
+       <div><span class="cp-muted">動物:</span> ${groups.map(([g, a]) => `<span class="cp-q cp-qg${on('group', g) ? ' on' : ''}" data-kind="group" data-value="${CardPicker.esc(g)}" title="${CardPicker.esc(a || '')}">${CardPicker.esc(g)}</span>`).join('')}</div>` +
+      (this._items.some((x) => x.rank)
+        ? `<div><span class="cp-muted">ランク:</span> ${[1, 2, 3, 4, 5].map((n) => `<span class="cp-q cp-qg cp-qr${on('rank', n) ? ' on' : ''}" data-kind="rank" data-value="${n}">★${n}</span>`).join('')}
+           <span class="cp-q cp-qg${this.rankGe ? ' on' : ''}" data-kind="rankop" data-value="ge" title="選んだランク以上を対象にする">以上</span></div>` : '');
   }
   /** 絞り込み後のカード（チップ・入力文字） */
   filtered() {
@@ -212,8 +218,10 @@ class CardPicker {
     const words = norm(this.input.value).split(/\s+/).filter(Boolean);
     const attrs = this.chips.filter((c) => c.kind === 'attr').map((c) => c.value);
     const groups = this.chips.filter((c) => c.kind === 'group').map((c) => c.value);
+    const rank = this.chips.find((c) => c.kind === 'rank');
     return this._items.filter((x) => {
       // （カードのチップは一覧の絞り込みには使わない。ほかのカードに選び直せるように）
+      if (rank && !CardPicker.rankOk(x.rank, rank)) return false;
       if (attrs.length && !attrs.includes(x.attr)) return false;
       if (groups.length && !groups.includes(x.group)) return false;
       const hay = norm(`${x.attr} ${x.group} ${x.groupLabel || ''} ${x.name}`);
@@ -250,7 +258,7 @@ class CardPicker {
         for (const x of list) {
           const sel = this.mode === 'filter' ? this.chips.some((c) => c.kind === 'card' && c.value === x.id) : x.id === this._value;
           parts.push(`<div class="cp-item${x.disabled ? ' disabled' : ''}${sel ? ' selected' : ''}" data-id="${E(x.id)}" title="${E(x.title || '')}">
-            ${E(x.name)}${x.note ? ` <span class="cp-note">${E(x.note)}</span>` : ''}</div>`);
+            ${E(x.name)}${x.rank ? ` <span class="rank">★${x.rank}</span>` : ''}${x.note ? ` <span class="cp-note">${E(x.note)}</span>` : ''}</div>`);
         }
       }
     }
@@ -268,6 +276,23 @@ class CardPicker {
   // ---- 操作 ----
   addChip(kind, value) {
     if (!value) return;
+    if (kind === 'rankop') {
+      // 「以上」の切り替え。ランクのチップがあれば条件も切り替える
+      this.rankGe = !this.rankGe;
+      for (const c of this.chips) if (c.kind === 'rank') { c.op = this.rankGe ? 'ge' : 'eq'; c.label = `★${c.value}${this.rankGe ? ' 以上' : ''}`; }
+      this.renderChips(); this.renderQuick(); this.renderList(); this.fireFilter();
+      return;
+    }
+    if (kind === 'rank') {
+      const n = +value;
+      const had = this.chips.some((c) => c.kind === 'rank' && c.value === n);
+      this.chips = this.chips.filter((c) => c.kind !== 'rank');  // ランクも 1 つだけ
+      if (!had) this.chips.push({ kind: 'rank', value: n, op: this.rankGe ? 'ge' : 'eq', label: `★${n}${this.rankGe ? ' 以上' : ''}` });
+      this.input.value = '';
+      this.active = -1;
+      this.renderChips(); this.renderQuick(); this.renderList(); this.fireFilter();
+      return;
+    }
     const i = this.chips.findIndex((c) => c.kind === kind && c.value === value);
     if (i >= 0) this.chips.splice(i, 1);  // もう一度クリックで外す
     else if (kind === 'attr') {
@@ -312,6 +337,8 @@ class CardPicker {
     } else if (ev.key === 'Tab') this.close();
   }
 
+  /** ランクの条件に合うか（ランク未設定のカードは合わない） */
+  static rankOk(rank, chip) { return !!rank && (chip.op === 'ge' ? rank >= chip.value : rank === chip.value); }
   static esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   static badge(attr) { return attr ? `<span class="attr ${CardPicker.esc(attr)}">${CardPicker.esc(attr)}</span>` : '<span class="cp-muted">属性不明</span>'; }
 }

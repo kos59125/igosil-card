@@ -37,6 +37,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(ROOT, "static")
 DATA_DIR = os.path.join(ROOT, "data")
 CARDS_PATH = os.path.join(DATA_DIR, "cards.json")
+# 所持カードのランク（個人の情報なので定石データとは別に保存し、git の管理対象から外す）
+RANKS_PATH = os.path.join(DATA_DIR, "ranks.json")
 CARD_SOURCE_URL = "https://gonote-app.com/article/TSqUCWy46aAwyoUyrix2"
 
 GTP_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ"  # I を飛ばす
@@ -382,6 +384,31 @@ ATTRS = ("地", "宙", "海")
 SGF_RE = re.compile(r"\(\s*;(?:[^()\"\\]|\\.)*?(?:[BW]\[[a-s]{2}\]|A[BW]\[[a-s]{2}\])(?:[^()\"\\]|\\.)*\)")
 SGF_MOVE_RE = re.compile(r"(?<![A-Z])(B|W|AB|AW)((?:\[[a-s]{0,2}\]\s*)+)")
 TAG_RE = re.compile(r"<[^>]+>")
+
+
+def load_ranks():
+    try:
+        with open(RANKS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: int(v) for k, v in (data.get("ranks") or {}).items() if 1 <= int(v) <= 5}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def save_ranks(ranks):
+    clean = {str(k): int(v) for k, v in ranks.items() if v is not None and 1 <= int(v) <= 5}
+    # 見て分かるように、カード名も添えて保存する（読み込みには使わない）
+    names = {}
+    try:
+        names = {c["id"]: f'{c.get("slot", "")}: {c.get("name", "")}' for c in load_cards().get("cards", [])}
+    except (OSError, ValueError, KeyError):
+        pass
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = RANKS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"ranks": clean, "names": {k: names.get(k, "") for k in clean}}, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, RANKS_PATH)
+    return clean
 
 
 def load_cards():
@@ -823,6 +850,8 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 log("error:", repr(e))
                 return self._json({"error": str(e)}, HTTPStatus.BAD_GATEWAY)
+        if self.path == "/api/ranks":
+            return self._json({"ranks": load_ranks()})
         if self.path == "/api/cards":
             with self.cards_lock:
                 return self._json(load_cards())
@@ -838,6 +867,9 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if self.path == "/api/analyze":
                 return self._analyze()
+            if self.path == "/api/ranks":
+                body = self._body()
+                return self._json({"ranks": save_ranks(body.get("ranks") or {})})
             if self.path == "/api/cards":
                 body = self._body()
                 with self.cards_lock:
