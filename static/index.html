@@ -23,15 +23,34 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
 .nw { white-space: nowrap; }
-header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+header { display: flex; align-items: center; gap: 12px; padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
 header h1 { font-size: 16px; margin: 0; }
 .status { font-size: 12px; color: var(--muted); }
 .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 4px; }
 .status.ok .dot { background: var(--ok); } .status.bad .dot { background: var(--bad); }
 .status.loading .dot { background: #e0a800; animation: blink 1s ease-in-out infinite alternate; }
 @keyframes blink { from { opacity: 1; } to { opacity: .3; } }
-main { display: grid; grid-template-columns: minmax(320px, 620px) minmax(320px, 1fr); gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+/* 画面の高さに収める: ヘッダー + 3 列（盤面 | 配置・勝率 | タブ）。各列は中でスクロールする */
+:root { --board-size: min(calc(100vh - 86px), 40vw, 680px); }
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+header { flex: none; }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: auto minmax(300px, 340px) minmax(360px, 1fr); gap: 12px; padding: 12px; }
+main > .panel { min-height: 0; overflow: auto; }
+#board-panel { padding: 8px; overflow: hidden; }
+#tabs-panel { display: flex; flex-direction: column; overflow: hidden; }
+#tabs-panel > .tab.active { flex: 1; min-height: 0; overflow: auto; }
+#tab-opt.active { display: flex; flex-direction: column; }
+#tab-opt > * { flex: none; }
+#tab-opt .results-box { flex: 1 1 auto; min-height: 200px; }
+/* 幅が足りないときは縦に並べ、ページ全体をスクロールする */
+@media (max-width: 1100px) {
+  :root { --board-size: min(calc(100vw - 48px), 600px); }
+  body { overflow: auto; display: block; height: auto; }
+  main { grid-template-columns: 1fr; }
+  main > .panel, #tabs-panel { overflow: visible; }
+  #tab-opt .results-box { height: 60vh; }
+}
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 .panel h2 { font-size: 14px; margin: 0 0 8px; }
 button { font: inherit; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; }
@@ -44,19 +63,23 @@ label { cursor: pointer; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
 .muted { color: var(--muted); font-size: 12px; }
 #board-wrap { position: relative; }
-#board { width: 100%; height: auto; display: block; }
-.corners { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
-.corner { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+#board { width: var(--board-size); height: var(--board-size); display: block; }
+.corners { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.corner { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; min-width: 0; }
+.corner-row { display: flex; align-items: center; gap: 8px; }
+.corner-row .picker-slot { flex: 1; min-width: 0; }
 .corner.mine { border-color: var(--accent-2); }
-.corner .title { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+.corner .title { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 6px; }
+.corner .title > span:first-child { white-space: nowrap; }
+.corner .attr-badge { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* カード選択ボックス（static/picker.js） */
 .picker-slot { margin: 4px 0; }
-.cp { position: relative; }
+.cp { position: relative; min-width: 0; }
 .cp-box { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 30px; padding: 2px 52px 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); cursor: text; position: relative; }
 .cp.open .cp-box { border-color: var(--accent-2); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 25%, transparent); }
 .cp-input { flex: 1; min-width: 60px; border: none !important; background: transparent !important; outline: none; padding: 2px 0 !important; font: inherit; color: var(--text); }
 .cp:not(.open) .cp-input { position: absolute; opacity: 0; pointer-events: none; width: 1px; }
-.cp-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.cp-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .cp-clear, .cp-caret { position: absolute; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--muted); padding: 0 4px; cursor: pointer; }
 .cp-clear { right: 22px; } .cp-caret { right: 6px; pointer-events: none; }
 .cp-chip { display: inline-flex; align-items: center; gap: 3px; padding: 0 4px 0 6px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); font-size: 12px; color: var(--text); }
@@ -68,7 +91,8 @@ label { cursor: pointer; }
 .cp-q.on .attr, .cp-qg.on { outline: 2px solid var(--accent-2); outline-offset: 1px; }
 .cp-qg { border: 1px solid var(--border); border-radius: 10px; padding: 0 6px; margin: 1px 2px; font-size: 12px; white-space: nowrap; }
 .cp-h2 .cp-muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.corner:nth-child(even) .cp-pop { left: auto; right: 0; }
+.cp.filter:not(.open) .cp-input { position: static; opacity: 1; pointer-events: auto; width: auto; }
+.cp-chip.card { background: var(--flash); }
 .cp-qg:hover, .cp-q:hover .attr { filter: brightness(.95); background: var(--bg); }
 .cp-list { max-height: 320px; overflow: auto; padding: 4px 0; }
 .cp-h { display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: pointer; user-select: none; }
@@ -86,7 +110,7 @@ label { cursor: pointer; }
 .corner input:disabled + span, .corner label:has(input:disabled) { color: var(--muted); opacity: .6; }
 .attr { display: inline-block; min-width: 1.6em; text-align: center; border-radius: 4px; color: #1f2328; font-weight: 600; font-size: 12px; padding: 0 4px; }
 .attr.地 { background: var(--chi); } .attr.宙 { background: var(--chu); } .attr.海 { background: var(--umi); }
-.result { display: flex; gap: 16px; align-items: baseline; margin-top: 10px; flex-wrap: wrap; }
+.result { display: flex; gap: 16px; align-items: baseline; margin-top: 6px; flex-wrap: wrap; }
 .big { font-size: 28px; font-weight: 700; }
 .bar { height: 10px; background: #222; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
 .bar > div { height: 100%; background: #fafafa; }
@@ -110,10 +134,18 @@ tr.row-new { animation: row-in 1.8s ease-out; }
 #opt-context:empty { display: none; }
 #opt-caption:empty { display: none; }
 .scroll { max-height: 460px; overflow: auto; }
+/* 結果の表（全件。見えている行だけ描く） */
+.result-filters { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 6px; align-items: center; margin-top: 8px; }
+.results-box { overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+#opt-results { table-layout: fixed; }
+#opt-results tbody tr.rrow { height: 30px; }
+#opt-results tbody tr.rrow td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-top: 0; padding-bottom: 0; }
+#opt-results tbody tr.spacer td { border: none; padding: 0; }
+@media (max-width: 1400px) { .result-filters { grid-template-columns: auto 1fr; } }
 .progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent-2); width: 0; transition: width .2s; }
 .good { color: var(--ok); } .badc { color: var(--bad); }
-.msg { white-space: pre-wrap; font-size: 12px; padding: 6px 8px; border-radius: 6px; background: var(--bg); margin-top: 6px; max-height: 160px; overflow: auto; }
+.msg { white-space: pre-wrap; font-size: 12px; padding: 6px 8px; border-radius: 6px; background: var(--bg); margin-top: 6px; max-height: 120px; overflow: auto; }
 .msg:empty { display: none; }
 dialog { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); max-width: 760px; width: 95vw; }
 dialog::backdrop { background: rgba(0,0,0,.4); }
@@ -133,10 +165,13 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 </header>
 
 <main>
-  <section class="panel">
+  <section class="panel" id="board-panel">
     <div id="board-wrap"><svg id="board" viewBox="0 0 400 400" aria-label="盤面"></svg></div>
+  </section>
+
+  <section class="panel" id="control-panel">
     <div class="corners" id="corners"></div>
-    <div class="muted">グレーのカード・反転は防御側（右上・左下）の配置と石が衝突するため、挑戦側（左上・右下）には置けません。</div>
+    <div class="muted" title="防御側（右上・左下）の配置と石が衝突するカード・向きは、挑戦側（左上・右下）には置けません">グレーのカード・反転は、防御側と衝突するため置けません。</div>
     <div class="msg" id="placement-note"></div>
     <div class="row">
       <button id="btn-eval" class="primary">勝率を計算</button>
@@ -156,7 +191,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     <div id="matchup"></div>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="tabs-panel">
     <div class="tabs">
       <button data-tab="opt" class="active">挑戦の最適化</button>
       <button data-tab="def">防御の最適化</button>
@@ -186,11 +221,16 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <div class="progress"><div id="opt-progress"></div></div>
       <div class="msg" id="opt-live" style="font-weight:600"></div>
       <details id="opt-log-wrap" open style="margin-top:6px"><summary class="muted">評価ログ</summary>
-        <div class="msg" id="opt-log" style="font-family:ui-monospace,Consolas,monospace;max-height:180px"></div></details>
-      <div class="scroll" style="margin-top:8px">
-        <div id="opt-context"></div>
-        <div id="opt-caption"></div>
-        <table id="opt-results"><thead><tr><th>#</th><th>白勝率</th><th>リード</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
+        <div class="msg" id="opt-log" style="font-family:ui-monospace,Consolas,monospace;max-height:110px"></div></details>
+      <div id="opt-context"></div>
+      <div class="result-filters">
+        <span class="muted nw">左上 (A)</span><div class="flt" id="flt-a"></div>
+        <span class="muted nw">右下 (B)</span><div class="flt" id="flt-b"></div>
+      </div>
+      <div class="row" style="margin:4px 0 2px"><span id="opt-caption"></span><span style="flex:1"></span><span class="muted" id="opt-count"></span></div>
+      <div class="results-box" id="opt-results-box">
+        <table id="opt-results"><colgroup><col style="width:52px"><col style="width:62px"><col style="width:54px"><col><col><col style="width:42px"></colgroup>
+          <thead><tr><th>#</th><th>白勝率</th><th>リード</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="muted">結果の行をクリックすると盤面に反映します。</div>
     </div>
@@ -643,8 +683,7 @@ function renderCorners() {
     div.className = 'corner' + (isMyCorner(key) ? ' mine' : '');
     div.dataset.corner = key;
     div.innerHTML = `<div class="title"><span>${c.label}（${isMyCorner(key) ? '自分' : '相手'}・${c.mine ? '白' : '黒'}）配置 ${c.slot}</span><span class="attr-badge"></span></div>
-      <div class="picker-slot"></div>
-      <label><input type="checkbox" data-flip="${key}"> 反転</label>`;
+      <div class="corner-row"><div class="picker-slot"></div><label class="nw"><input type="checkbox" data-flip="${key}"> 反転</label></div>`;
     wrap.appendChild(div);
     const flip = div.querySelector('input');
     const old = cornerPickers[key];
@@ -1046,7 +1085,10 @@ async function optimize() {
     const cacheKey = optCache.key(optimizationParams(tl, br));
     const hit = optCache.get(cacheKey);
     if (hit) {
-      renderResults(hit.results, `キャッシュから表示（${hit.savedAt} の解析結果）`);
+      const cached = hit.compact
+        ? hit.compact.map(([tl, tf, br, bf, w, lead]) => ({ pl: { TR: placement.TR, BL: placement.BL, TL: tl && { id: tl, flip: !!tf }, BR: br && { id: br, flip: !!bf } }, winrateWhite: w, scoreLeadWhite: lead }))
+        : hit.results;
+      renderResults(cached, `キャッシュから表示（${hit.savedAt} の解析結果）`);
       log(`同じ条件の解析結果があるため、キャッシュから表示しました（${hit.savedAt} 解析、${hit.count} 通り、所要 ${hit.elapsed}）`);
       info.textContent = `${hit.count} 通り評価（キャッシュ）`;
       bar.style.width = '100%';
@@ -1067,11 +1109,12 @@ async function optimize() {
     info.textContent = `${cancelOpt ? '中止: ' : ''}${results.length} 通り評価（${elapsed}）`;
     log(`最適化${cancelOpt ? '中止' : '終了'}: 合計 ${elapsed}`);
     bar.style.width = '100%';
-    // 最後まで終わってエラーも無ければキャッシュする（上位のみ保存）
+    // 最後まで終わってエラーも無ければキャッシュする（全件を短い形で保存）
     if (!cancelOpt && !errors) {
       optCache.set(cacheKey, {
         savedAt: new Date().toLocaleTimeString('ja-JP', { hour12: false }), count: results.length, elapsed,
-        results: [...results].sort(compareResults).slice(0, 200).map(({ pl, winrateWhite, scoreLeadWhite, visits }) => ({ pl, winrateWhite, scoreLeadWhite, visits })),
+        compact: results.map(({ pl, winrateWhite, scoreLeadWhite }) => [pl.TL?.id ?? null, pl.TL?.flip ? 1 : 0, pl.BR?.id ?? null, pl.BR?.flip ? 1 : 0,
+          Math.round(winrateWhite * 1e5) / 1e5, Math.round(scoreLeadWhite * 100) / 100]),
       });
     }
   } catch (e) {
@@ -1091,59 +1134,106 @@ function placementText(p) {
   const c = cardById(p.id);
   return `<span class="attr ${c.attr}">${c.attr}</span> <span class="muted">${esc(groupShort(c))}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}`;
 }
-// 結果の表（上位 RESULT_LIMIT 件）。解析中は結果が届くたびに順位の位置へ挿入する
-const RESULT_LIMIT = 50;
+// 結果の表（全件）。解析中は結果が届くたびに順位の位置へ挿入する。
+// 件数が多い（数万）ので、見えている範囲の行だけを描く。左上・右下の列は選択ボックスと同じ方法で絞り込める。
+const RESULT_ROW_H = 30;
+const FRESH_MS = 1800;  // 新しく入った行を強調表示する時間
 let lastResults = [];
+let resultsEmptyText = '';
 /** 並び順: 白勝率の高い順、同じなら属性相性の良い順 */
 const compareResults = (a, b) => b.winrateWhite - a.winrateWhite || matchupScore(b.pl) - matchupScore(a.pl);
-function resultRow(r) {
-  const m = matchupScore(r.pl);
-  const tr = document.createElement('tr');
-  tr.className = 'clickable';
-  tr.innerHTML = `<td></td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
-    <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td>
-    <td>${placementText(r.pl.TL)}</td><td>${placementText(r.pl.BR)}</td>
-    <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td>`;
-  tr._result = r;
-  return tr;
+/** カード id → 絞り込み判定用の情報 */
+function cardItem(id) { const c = id && cardById(id); return c && { id: c.id, attr: c.attr || '', group: groupShort(c), groupLabel: groupName(c), name: c.name }; }
+const resultFilters = {};
+function initResultFilters() {
+  for (const [key, slot, el] of [['TL', 'A', '#flt-a'], ['BR', 'B', '#flt-b']]) {
+    resultFilters[key] = new CardPicker({
+      mode: 'filter',
+      placeholder: '属性・動物・カード名で絞り込み',
+      getItems: () => activeCards().filter((c) => c.slot === slot).map((c) => cardItem(c.id)),
+      onFilter: () => { $('#opt-results-box').scrollTop = 0; scheduleResults(); },
+    });
+    $(el).appendChild(resultFilters[key].el);
+  }
 }
-function renumberRows(from = 0) {
-  const rows = $('#opt-results tbody').rows;
-  for (let i = from; i < rows.length; i++) rows[i].cells[0].textContent = i + 1;
+let resultsView = [];      // 絞り込み後の [順位(0 始まり), 結果]
+let resultsRaf = 0, resultsFadeTimer = 0;
+function scheduleResults() { if (!resultsRaf) resultsRaf = requestAnimationFrame(drawResults); }
+function placementCell(p) {
+  if (!p) return '<span class="muted">（なし）</span>';
+  const c = cardById(p.id);
+  return `<span class="attr ${c.attr}">${c.attr}</span> <span class="muted">${esc(groupShort(c))}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}`;
 }
+function drawResults() {
+  resultsRaf = 0;
+  const fa = resultFilters.TL, fb = resultFilters.BR;
+  const filtering = fa?.active_ || fb?.active_;
+  resultsView = [];
+  for (let k = 0; k < lastResults.length; k++) {
+    const r = lastResults[k];
+    if (filtering && (!fa.matches(cardItem(r.pl.TL?.id)) || !fb.matches(cardItem(r.pl.BR?.id)))) continue;
+    resultsView.push(k);
+  }
+  $('#opt-count').textContent = lastResults.length ? (filtering ? `${resultsView.length.toLocaleString()} / ${lastResults.length.toLocaleString()} 件` : `${lastResults.length.toLocaleString()} 件`) : '';
+  const box = $('#opt-results-box'), tb = $('#opt-results tbody');
+  if (!resultsView.length) {
+    tb.innerHTML = `<tr><td colspan="6" class="muted">${lastResults.length ? '条件に合う組み合わせがありません' : esc(resultsEmptyText)}</td></tr>`;
+    return;
+  }
+  const head = $('#opt-results thead').offsetHeight;
+  const top = Math.max(0, box.scrollTop - head), h = box.clientHeight;
+  const start = Math.max(0, Math.floor(top / RESULT_ROW_H) - 8);
+  const end = Math.min(resultsView.length, Math.ceil((top + h) / RESULT_ROW_H) + 8);
+  const now = performance.now();
+  let fresh = false;
+  const rows = [];
+  for (let v = start; v < end; v++) {
+    const k = resultsView[v], r = lastResults[k];
+    const m = matchupScore(r.pl);
+    const age = r._t ? now - r._t : Infinity;
+    let style = '';
+    if (age < FRESH_MS) { fresh = true; style = ` style="background:color-mix(in srgb, var(--flash) ${Math.round(100 * (1 - age / FRESH_MS))}%, transparent)"`; }
+    const tip = `${cardItem(r.pl.TL?.id)?.name || '（なし）'}${r.pl.TL?.flip ? '（反転）' : ''} / ${cardItem(r.pl.BR?.id)?.name || '（なし）'}${r.pl.BR?.flip ? '（反転）' : ''}`;
+    rows.push(`<tr class="rrow clickable" data-k="${k}"${style} title="${esc(tip)}"><td>${k + 1}</td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
+      <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td><td>${placementCell(r.pl.TL)}</td><td>${placementCell(r.pl.BR)}</td>
+      <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td></tr>`);
+  }
+  tb.innerHTML = `<tr class="spacer" style="height:${start * RESULT_ROW_H}px"><td colspan="6"></td></tr>${rows.join('')}` +
+    `<tr class="spacer" style="height:${(resultsView.length - end) * RESULT_ROW_H}px"><td colspan="6"></td></tr>`;
+  // 強調表示が残っている行があれば、薄くなっていくように描き直す
+  clearTimeout(resultsFadeTimer);
+  if (fresh) resultsFadeTimer = setTimeout(scheduleResults, 120);
+}
+$('#opt-results-box').addEventListener('scroll', scheduleResults);
+window.addEventListener('resize', scheduleResults);
 /** 表を空にして、解析中の段階を見出しに出す */
 function resetResults(caption = '') {
   lastResults = [];
-  $('#opt-results tbody').innerHTML = '';
+  resultsEmptyText = '';
   $('#opt-caption').textContent = caption;
+  $('#opt-results-box').scrollTop = 0;
+  scheduleResults();
 }
-/** 解析中に 1 件追加。上位に入るなら順位の位置に挿入して強調表示する */
+/** 解析中に 1 件追加（順位の位置に挿入し、しばらく強調表示する） */
 function insertResult(r) {
   let lo = 0, hi = lastResults.length;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (compareResults(lastResults[mid], r) <= 0) lo = mid + 1; else hi = mid; }
+  r._t = performance.now();
   lastResults.splice(lo, 0, r);
-  if (lo >= RESULT_LIMIT) return;
-  const tb = $('#opt-results tbody');
-  const tr = resultRow(r);
-  tr.classList.add('row-new');
-  tr.addEventListener('animationend', () => tr.classList.remove('row-new'), { once: true });
-  tb.insertBefore(tr, tb.rows[lo] || null);
-  if (tb.rows.length > RESULT_LIMIT) tb.deleteRow(-1);
-  renumberRows(lo);
+  scheduleResults();
 }
 /** 最終結果を描き直す（強調表示なし） */
 function renderResults(results, caption = '') {
   lastResults = [...results].sort(compareResults);
-  const tb = $('#opt-results tbody');
-  tb.innerHTML = '';
-  for (const r of lastResults.slice(0, RESULT_LIMIT)) tb.appendChild(resultRow(r));
-  if (!lastResults.length) tb.innerHTML = '<tr><td colspan="6" class="muted">有効な組み合わせがありませんでした</td></tr>';
-  renumberRows();
+  for (const r of lastResults) delete r._t;
+  resultsEmptyText = '有効な組み合わせがありませんでした';
   $('#opt-caption').textContent = caption;
+  scheduleResults();
 }
 $('#opt-results').addEventListener('click', (ev) => {
-  const tr = ev.target.closest('tr'); if (!tr?._result) return;
-  const r = tr._result;
+  const tr = ev.target.closest('tr[data-k]'); if (!tr) return;
+  const r = lastResults[+tr.dataset.k];
+  if (!r) return;
   placement.TL = r.pl.TL; placement.BR = r.pl.BR;
   store.set('placement', placement);
   syncCornerInputs(); updateAvailability(); renderAll();
@@ -1371,6 +1461,7 @@ for (const id of SETTINGS) {
   });
 }
 
+initResultFilters();
 refreshStatus();
 loadCards().then(() => { if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });

@@ -12,21 +12,28 @@
 //   container.appendChild(p.el); p.value = 'cardId';
 //   getItems() は開いたときに呼ばれ、[{ id, attr, group, groupLabel, name, note, disabled, title }] を返す
 //   describe(id) は閉じているときの表示用に { attr, group, name } を返す
+//
+// 絞り込み専用（mode: 'filter'）: カードを 1 枚選ぶのではなく、属性・動物・カードのチップと入力文字を条件として持つ。
+//   閉じても条件は残り、変わるたびに onFilter() を呼ぶ。p.matches(item) で条件に合うか判定できる。
 // ---------------------------------------------------------------------------
 class CardPicker {
-  constructor({ getItems, describe, onChange, placeholder = 'カード名・動物・属性で絞り込み', noneLabel = '（なし）' }) {
+  constructor({ getItems, describe, onChange, onFilter, mode = 'select', placeholder = 'カード名・動物・属性で絞り込み', noneLabel }) {
+    this.mode = mode;
+    this.onFilter = onFilter;
+    this.placeholder = placeholder;
+    noneLabel = noneLabel ?? (mode === 'filter' ? '（すべて）' : '（なし）');
     this.getItems = getItems;
     this.describe = describe;  // id → { attr, group, name }（閉じているときの表示用。軽い処理で済ませる）
     this.onChange = onChange;
     this.noneLabel = noneLabel;
-    this.chips = [];          // [{ kind: 'attr' | 'group', value, label }]
+    this.chips = [];          // [{ kind: 'attr' | 'group' | 'card', value, label }]
     this.collapsed = new Set(); // 折りたたんだ見出し（"attr:地" / "group:地|ウサギ"）
     this._value = null;
     this._items = [];
     this.active = -1;          // キーボードで選択中の行（表示中のカード行の番号）
 
     const el = document.createElement('div');
-    el.className = 'cp';
+    el.className = 'cp' + (mode === 'filter' ? ' filter' : '');
     el.innerHTML = `
       <div class="cp-box">
         <span class="cp-chips"></span>
@@ -49,9 +56,16 @@ class CardPicker {
       if (ev.target.closest('.cp-clear') || ev.target.closest('.cp-chip-x')) return;
       if (!this.isOpen) { ev.preventDefault(); this.open(); }
     });
-    el.querySelector('.cp-clear').addEventListener('click', (ev) => { ev.stopPropagation(); this.select(null); });
+    el.querySelector('.cp-clear').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (this.mode === 'filter') this.clearFilter(); else this.select(null);
+    });
     // 文字を入力したら、最初に一致したカードを選択中にする（Enter ですぐ決定できる）
-    this.input.addEventListener('input', () => { this.renderList(); this.active = this.rows().length > 1 ? 1 : -1; this.highlight(); });
+    this.input.addEventListener('input', () => {
+      if (!this.isOpen) this.open();
+      this.renderList(); this.active = this.rows().length > 1 ? 1 : -1; this.highlight();
+      this.fireFilter();
+    });
     this.input.addEventListener('keydown', (ev) => this.onKey(ev));
     this.input.addEventListener('focus', () => { if (!this.isOpen) this.open(); });
     // 一覧・チップのクリック（入力欄のフォーカスを失わないよう mousedown で処理）
@@ -61,12 +75,15 @@ class CardPicker {
       if (!x) return;
       ev.preventDefault(); ev.stopPropagation();
       this.chips.splice(+x.dataset.i, 1);
-      this.renderChips(); this.renderList();
-      if (!this.isOpen) this.open();
+      this.renderChips();
+      if (this.isOpen) { this.renderQuick(); this.renderList(); }
+      this.fireFilter();
     });
     // クリックで一覧を描き直すと押した要素が DOM から外れるので、イベントの経路で内側かどうかを判定する
     this._outside = (ev) => { if (!ev.composedPath().includes(el)) this.close(); };
-    this.renderValue();
+    // 一覧は画面に固定して表示する（スクロールする枠の中でも切れないように）。スクロール・リサイズに追従
+    this._reposition = () => this.position();
+    this.renderValue(); this.renderChips();
   }
 
   get isOpen() { return !this.pop.hidden; }
@@ -78,7 +95,10 @@ class CardPicker {
     this.pop.hidden = false;
     this.el.classList.add('open');
     this.renderValue(); this.renderChips(); this.renderQuick(); this.renderList();
+    this.position();
     document.addEventListener('mousedown', this._outside);
+    window.addEventListener('scroll', this._reposition, true);
+    window.addEventListener('resize', this._reposition);
     this.input.focus();
     // 選択中のカードが見えるようにする
     const cur = this.list.querySelector('.cp-item.selected');
@@ -88,13 +108,65 @@ class CardPicker {
     if (!this.isOpen) return;
     this.pop.hidden = true;
     this.el.classList.remove('open');
-    this.input.value = '';
+    if (this.mode !== 'filter') this.input.value = '';  // 絞り込み専用では入力文字も条件として残す
     this.active = -1;
     document.removeEventListener('mousedown', this._outside);
+    window.removeEventListener('scroll', this._reposition, true);
+    window.removeEventListener('resize', this._reposition);
     this.input.blur();
     this.renderValue(); this.renderChips();
   }
+  /** 一覧の位置: 入力欄の下（入らなければ上）に、画面内に収まるように置く */
+  position() {
+    if (this.pop.hidden) return;
+    const r = this.box.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight, margin = 8;
+    const width = Math.min(Math.max(r.width, 380), vw - margin * 2);
+    const left = Math.min(Math.max(margin, r.left), vw - width - margin);
+    const below = vh - r.bottom - margin, above = r.top - margin;
+    const up = below < 260 && above > below;
+    const room = Math.max(160, up ? above : below);
+    Object.assign(this.pop.style, { position: 'fixed', left: left + 'px', width: width + 'px', maxHeight: room + 'px',
+      top: up ? '' : (r.bottom + 2) + 'px', bottom: up ? (vh - r.top + 2) + 'px' : '' });
+  }
+  /** 絞り込み専用: 条件が変わったことを知らせる */
+  fireFilter() { if (this.mode === 'filter') { this.renderValue(); this.onFilter?.(); } }
+  /** 絞り込み専用: 条件があるか */
+  get active_() { return !!(this.chips.length || this.input.value.trim()); }
+  /** item（{ id, attr, group, groupLabel, name }）が条件に合うか */
+  matches(x) {
+    if (!x) return !this.active_;
+    const norm = (t) => String(t || '').normalize('NFKC').toLowerCase();
+    for (const c of this.chips) {
+      if (c.kind === 'attr' && x.attr !== c.value) return false;
+      if (c.kind === 'group' && x.group !== c.value) return false;
+      if (c.kind === 'card' && x.id !== c.value) return false;
+    }
+    const words = norm(this.input.value).split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    const hay = norm(`${x.attr} ${x.group} ${x.groupLabel || ''} ${x.name}`);
+    return words.every((w) => hay.includes(w));
+  }
+  /** 絞り込み専用: すべての条件を外す */
+  clearFilter() {
+    this.chips = []; this.input.value = '';
+    this.renderChips();
+    if (this.isOpen) { this.renderQuick(); this.renderList(); }
+    this.fireFilter();
+  }
+
   select(id) {
+    if (this.mode === 'filter') {
+      // 絞り込み専用: カードを選ぶとカードのチップ（1 枚だけ）、（すべて）で条件をすべて外す
+      if (!id) { this.close(); this.clearFilter(); return; }
+      const x = this._items.find((it) => it.id === id);
+      this.chips = this.chips.filter((c) => c.kind !== 'card');
+      this.chips.push({ kind: 'card', value: id, label: x ? x.name : id });
+      this.input.value = '';
+      this.close();
+      this.fireFilter();
+      return;
+    }
     this.close();
     if ((id || null) === this._value) return;
     this._value = id || null;
@@ -105,6 +177,12 @@ class CardPicker {
   // ---- 表示 ----
   renderValue() {
     const v = this.el.querySelector('.cp-value');
+    if (this.mode === 'filter') {
+      // 絞り込み専用: 条件（チップ・入力欄）を常に表示し、条件があるときだけ × を出す
+      v.hidden = true;
+      this.el.querySelector('.cp-clear').hidden = !this.active_;
+      return;
+    }
     const item = this._value && (this.describe ? this.describe(this._value) : this.getItems().find((x) => x.id === this._value));
     v.innerHTML = item ? `${CardPicker.badge(item.attr)} <span class="cp-muted">${CardPicker.esc(item.group)}</span> ${CardPicker.esc(item.name)}`
       : `<span class="cp-muted">${CardPicker.esc(this.noneLabel)}</span>`;
@@ -113,9 +191,10 @@ class CardPicker {
   }
   renderChips() {
     const wrap = this.el.querySelector('.cp-chips');
-    wrap.innerHTML = this.isOpen ? this.chips.map((c, i) =>
-      `<span class="cp-chip ${c.kind === 'attr' ? 'attr ' + CardPicker.esc(c.value) : ''}">${CardPicker.esc(c.label)}<span class="cp-chip-x" data-i="${i}" title="条件を外す">×</span></span>`).join('') : '';
-    this.input.placeholder = this.chips.length ? '' : 'カード名・動物・属性で絞り込み';
+    const show = this.isOpen || this.mode === 'filter';
+    wrap.innerHTML = show ? this.chips.map((c, i) =>
+      `<span class="cp-chip ${c.kind === 'attr' ? 'attr ' + CardPicker.esc(c.value) : ''}${c.kind === 'card' ? ' card' : ''}">${CardPicker.esc(c.label)}<span class="cp-chip-x" data-i="${i}" title="条件を外す">×</span></span>`).join('') : '';
+    this.input.placeholder = this.chips.length ? '' : this.placeholder;
   }
   renderQuick() {
     const attrs = [...new Set(this._items.map((x) => x.attr).filter(Boolean))];
@@ -134,6 +213,7 @@ class CardPicker {
     const attrs = this.chips.filter((c) => c.kind === 'attr').map((c) => c.value);
     const groups = this.chips.filter((c) => c.kind === 'group').map((c) => c.value);
     return this._items.filter((x) => {
+      // （カードのチップは一覧の絞り込みには使わない。ほかのカードに選び直せるように）
       if (attrs.length && !attrs.includes(x.attr)) return false;
       if (groups.length && !groups.includes(x.group)) return false;
       const hay = norm(`${x.attr} ${x.group} ${x.groupLabel || ''} ${x.name}`);
@@ -144,7 +224,8 @@ class CardPicker {
     const E = CardPicker.esc;
     const items = this.filtered();
     const filtering = !!(this.input.value.trim() || this.chips.length);
-    const parts = [`<div class="cp-item cp-none${this._value ? '' : ' selected'}" data-id="">${E(this.noneLabel)}</div>`];
+    const none = this.mode === 'filter' ? !this.active_ : !this._value;
+    const parts = [`<div class="cp-item cp-none${none ? ' selected' : ''}" data-id="">${E(this.noneLabel)}</div>`];
     const byAttr = new Map();
     for (const x of items) {
       if (!byAttr.has(x.attr)) byAttr.set(x.attr, new Map());
@@ -167,7 +248,8 @@ class CardPicker {
           <span class="cp-q cp-qg" data-kind="group" data-value="${E(group)}" title="この動物で絞り込む">${E(group)}</span><span class="cp-muted">${E(desc)} ${list.length}</span></div>`);
         if (gClosed) continue;
         for (const x of list) {
-          parts.push(`<div class="cp-item${x.disabled ? ' disabled' : ''}${x.id === this._value ? ' selected' : ''}" data-id="${E(x.id)}" title="${E(x.title || '')}">
+          const sel = this.mode === 'filter' ? this.chips.some((c) => c.kind === 'card' && c.value === x.id) : x.id === this._value;
+          parts.push(`<div class="cp-item${x.disabled ? ' disabled' : ''}${sel ? ' selected' : ''}" data-id="${E(x.id)}" title="${E(x.title || '')}">
             ${E(x.name)}${x.note ? ` <span class="cp-note">${E(x.note)}</span>` : ''}</div>`);
         }
       }
@@ -201,6 +283,7 @@ class CardPicker {
     this.input.value = '';
     this.active = -1;
     this.renderChips(); this.renderQuick(); this.renderList();
+    this.fireFilter();
   }
   onPopClick(ev) {
     const q = ev.target.closest('.cp-q');
@@ -225,7 +308,7 @@ class CardPicker {
       if (row) this.select(row.dataset.id);
     } else if (ev.key === 'Escape') { ev.preventDefault(); this.close(); }
     else if (ev.key === 'Backspace' && !this.input.value && this.chips.length) {
-      this.chips.pop(); this.renderChips(); this.renderQuick(); this.renderList();
+      this.chips.pop(); this.renderChips(); this.renderQuick(); this.renderList(); this.fireFilter();
     } else if (ev.key === 'Tab') this.close();
   }
 
