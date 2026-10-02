@@ -764,15 +764,17 @@ function enforcePlacementRules() {
   }
   return notes;
 }
-/** 挑戦側の隅で置けない向きの「反転」をグレーアウトする（置けないカードは選択ボックスを開いたときにグレーアウト） */
+/** 「反転」の活性・非活性（置けないカードは選択ボックスを開いたときにグレーアウト） */
 function updateAvailability() {
-  for (const key of MY_CORNERS) {
+  // カード未設定の隅は、どの隅でも「反転」を非活性にする。挑戦側の隅は衝突する向きにも切り替えられない
+  for (const key of CORNER_ORDER) {
     const flip = $(`#corners input[data-flip="${key}"]`);
     if (!flip) continue;
     const p = placement[key];
-    const ok = p ? placeable(key, p.id) : [true, true];
+    const ok = p && CORNERS[key].mine ? placeable(key, p.id) : [true, true];
     flip.disabled = !p || !ok[+!p.flip];
-    flip.closest('label').title = p && !ok[+!p.flip] ? (p.flip ? '反転しない向きでは衝突します' : '反転すると衝突します') : '';
+    flip.closest('label').title = !p ? 'カードを選ぶと反転できます'
+      : !ok[+!p.flip] ? (p.flip ? '反転しない向きでは衝突します' : '反転すると衝突します') : '';
   }
 }
 
