@@ -41,6 +41,7 @@
     </div>
     <div class="row">
       <label><input type="checkbox" id="def-owned" checked> 自分の候補は所持カードのみ</label>
+      <label class="nw" title="所持カードのうち、設定したランク以上のカードだけを候補にします（ランクはカード一覧で設定）">ランク <select id="def-min-rank"><option value="0">指定なし</option><option value="1">★1 以上</option><option value="2">★2 以上</option><option value="3">★3 以上</option><option value="4">★4 以上</option><option value="5">★5</option></select></label>
       <label><input type="checkbox" id="def-flip" checked> 自分のカードの向き（反転）も探索</label>
     </div>
     <div class="row muted">相手の応手は、所持に関係なく全カード・両方の向きを全探索します（防御側と衝突するカード・向きは除外）。
@@ -122,15 +123,16 @@
     return out;
   }
   /** 自分のカード（隅 key）。sym = 反転しても同じ石の配置になるカード */
-  function myCards(key, attrs, ownedOnly) {
+  function myCards(key, attrs, ownedOnly, minRank = 0) {
     const slot = CORNERS[key].slot;
-    return activeCards().filter((c) => c.slot === slot && c.moves.length && attrs.has(c.attr) && (!ownedOnly || isOwned(c)))
+    return activeCards().filter((c) => c.slot === slot && c.moves.length && attrs.has(c.attr) && (!ownedOnly || isOwned(c)) &&
+        (!minRank || (isOwned(c) && (rankOf(c.id) || 0) >= minRank)))
       .map((c) => ({ id: c.id, sym: stoneSig(c, key, false) === stoneSig(c, key, true) }));
   }
   function currentCandidates() {
     const attrs = new Set($$('.def-attr').filter((x) => x.checked).map((x) => x.value));
-    const ownedOnly = $('#def-owned').checked, flip = $('#def-flip').checked;
-    const myA = myCards('TR', attrs, ownedOnly), myB = myCards('BL', attrs, ownedOnly);
+    const ownedOnly = $('#def-owned').checked, flip = $('#def-flip').checked, minRank = +$('#def-min-rank').value || 0;
+    const myA = myCards('TR', attrs, ownedOnly, minRank), myB = myCards('BL', attrs, ownedOnly, minRank);
     // バッグに入れる組: 両方反転なし / A のみ反転（B は反転なしで固定）
     const items = [];
     for (const a of myA) for (const b of myB) {
@@ -152,6 +154,7 @@
   }
   $$('.def-attr').forEach((x) => x.addEventListener('change', updateEstimate));
   $('#def-owned').addEventListener('change', updateEstimate);
+  $('#def-min-rank').addEventListener('change', updateEstimate);
   $('#def-flip').addEventListener('change', updateEstimate);
   $$('.tabs button').forEach((b) => b.addEventListener('click', () => { if (b.dataset.tab === 'def') updateEstimate(); }));
 
@@ -415,7 +418,7 @@
     const upper = items.length * nC * nD;
     const ctxLines = [
       `自分（防御・黒）の候補: 右上 (A) ${myA.length} 枚・左下 (B) ${myB.length} 枚（向き込み ${items.length} 組: 両方反転なし・A のみ反転）`,
-      `条件: 属性 ${$$('.def-attr').filter((x) => x.checked).map((x) => x.value).join('・') || 'なし'} / ${$('#def-owned').checked ? '所持カードのみ' : '未所持も含む'} / ${cand.flip ? '向きも探索' : '向きは表示通り'}`,
+      `条件: 属性 ${$$('.def-attr').filter((x) => x.checked).map((x) => x.value).join('・') || 'なし'} / ${$('#def-owned').checked ? '所持カードのみ' : '未所持も含む'}${+$('#def-min-rank').value ? ` / ランク ★${$('#def-min-rank').value}${$('#def-min-rank').value === '5' ? '' : ' 以上'}` : ''} / ${cand.flip ? '向きも探索' : '向きは表示通り'}`,
       `相手（挑戦・白）の応手: 全カード 左上 ${nC} × 右下 ${nD}（向き込み）から、有望な応手を重みつきで順に評価（全部で最大 ${upper.toLocaleString()} 局面）`,
       `エンジン: ${engineText()} / ${+$('#visits').value || 1} visits / コミ ${KOMI}（アゲハマで調整）・日本ルール / 選択確率 A・B 独立に各 1/${SET_SIZE}`,
     ];

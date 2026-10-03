@@ -219,6 +219,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       </div>
       <div class="row">
         <label><input type="checkbox" id="owned-only" checked> 所持カードのみ</label>
+        <label class="nw" title="所持カードのうち、設定したランク以上のカードだけを候補にします（ランクはカード一覧で設定）">ランク <select id="min-rank"><option value="0">指定なし</option><option value="1">★1 以上</option><option value="2">★2 以上</option><option value="3">★3 以上</option><option value="4">★4 以上</option><option value="5">★5</option></select></label>
         <label><input type="checkbox" id="try-flip" checked> 反転も試す</label>
         <label><input type="checkbox" id="fix-tl"> 左上を固定</label>
         <label><input type="checkbox" id="fix-br"> 右下を固定</label>
@@ -887,12 +888,15 @@ function candidatesFor(cornerKey) {
   if (fixed) return placement[cornerKey] ? [placement[cornerKey]] : [null];
   const attrs = new Set($$('.attr-filter').filter((x) => x.checked).map((x) => x.value));
   const ownedOnly = $('#owned-only').checked;
+  const minRank = +$('#min-rank').value || 0;
   const flips = $('#try-flip').checked ? [false, true] : [false];
   const res = [];
   for (const c of activeCards()) {
     if (c.slot !== CORNERS[cornerKey].slot || !c.moves.length) continue;
     if (!attrs.has(c.attr)) continue;
     if (ownedOnly && !isOwned(c)) continue;
+    // ランクは所持カードにだけ付くので、ランクの条件があれば所持カードに限られる
+    if (minRank && !(isOwned(c) && (rankOf(c.id) || 0) >= minRank)) continue;
     for (const f of flips) res.push({ id: c.id, flip: f });
   }
   // 対称なカードは反転しても同じ局面になるので除外
@@ -1029,7 +1033,7 @@ function optimizationParams(tl, br) {
     visits: +$('#visits').value || 1, komi: KOMI, rules: 'japanese',
     opponent: { TR: cardSig(placement.TR), BL: cardSig(placement.BL) },
     attrs: $$('.attr-filter').filter((x) => x.checked).map((x) => x.value),
-    ownedOnly: $('#owned-only').checked, tryFlip: $('#try-flip').checked,
+    ownedOnly: $('#owned-only').checked, minRank: +$('#min-rank').value || 0, tryFlip: $('#try-flip').checked,
     fixed: { TL: $('#fix-tl').checked ? cardSig(placement.TL) || 'none' : null, BR: $('#fix-br').checked ? cardSig(placement.BR) || 'none' : null },
     candidates: { TL: tl.map(cardSig), BR: br.map(cardSig) },
   };
@@ -1038,6 +1042,8 @@ function optimizationParams(tl, br) {
 function describeParams(tl, br) {
   const attrs = $$('.attr-filter').filter((x) => x.checked).map((x) => x.value).join('・') || 'なし';
   const opts = [$('#owned-only').checked ? '所持カードのみ' : '未所持も含む', $('#try-flip').checked ? '反転も試す' : '反転なし'];
+  const minRank = +$('#min-rank').value || 0;
+  if (minRank) opts.splice(1, 0, minRank === 5 ? 'ランク ★5' : `ランク ★${minRank} 以上`);
   if ($('#fix-tl').checked) opts.push(`左上固定: ${cornerText('TL')}`);
   if ($('#fix-br').checked) opts.push(`右下固定: ${cornerText('BR')}`);
   return [
@@ -1489,7 +1495,7 @@ $('#btn-attr-advantage').onclick = () => {
 };
 
 // 設定の保存・復元
-const SETTINGS = ['visits', 'batch', 'source-url', 'owned-only', 'try-flip', 'auto-eval'];
+const SETTINGS = ['visits', 'batch', 'source-url', 'owned-only', 'min-rank', 'try-flip', 'auto-eval'];
 const saved = store.get('settings', {});
 for (const id of SETTINGS) {
   const el = document.getElementById(id);

@@ -208,7 +208,8 @@ class CardPicker {
     this.el.querySelector('.cp-quick').innerHTML =
       `<div><span class="cp-muted">属性:</span> ${attrs.map((a) => `<span class="cp-q${on('attr', a) ? ' on' : ''}" data-kind="attr" data-value="${CardPicker.esc(a)}">${CardPicker.badge(a)}</span>`).join(' ')}</div>
        <div><span class="cp-muted">動物:</span> ${groups.map(([g, a]) => `<span class="cp-q cp-qg${on('group', g) ? ' on' : ''}" data-kind="group" data-value="${CardPicker.esc(g)}" title="${CardPicker.esc(a || '')}">${CardPicker.esc(g)}</span>`).join('')}</div>` +
-      (this._items.some((x) => x.rank)
+      // 絞り込み専用ではランクの行を常に出す（ランクはカード一覧で設定）
+      (this.mode === 'filter' || this._items.some((x) => x.rank)
         ? `<div><span class="cp-muted">ランク:</span> ${[1, 2, 3, 4, 5].map((n) => `<span class="cp-q cp-qg cp-qr${on('rank', n) ? ' on' : ''}" data-kind="rank" data-value="${n}">★${n}</span>`).join('')}
            <span class="cp-q cp-qg${this.rankGe ? ' on' : ''}" data-kind="rankop" data-value="ge" title="選んだランク以上を対象にする">以上</span></div>` : '');
   }
