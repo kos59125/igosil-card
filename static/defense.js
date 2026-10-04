@@ -44,6 +44,14 @@
       <label class="nw" title="所持カードのうち、設定したランク以上のカードだけを候補にします（ランクはカード一覧で設定）">ランク <select id="def-min-rank"><option value="0">指定なし</option><option value="1">★1 以上</option><option value="2">★2 以上</option><option value="3">★3 以上</option><option value="4">★4 以上</option><option value="5">★5</option></select></label>
       <label><input type="checkbox" id="def-flip" checked> 自分のカードの向き（反転）も探索</label>
     </div>
+    <details id="def-fixed-wrap" open style="margin:4px 0"><summary class="muted"><b>固定するカード（任意）</b> <span id="def-fixed-summary"></span></summary>
+      <div class="muted">必ず採用するカードを選びます。固定したカードは指定した向きで使い（属性・所持・ランクの条件に関係なく）、残りの枚数だけを探索します。</div>
+      <div class="def-fixed-grid">
+        <span class="muted nw">右上 (A)</span><div class="def-fixed-side" data-side="A"></div>
+        <span class="muted nw">左下 (B)</span><div class="def-fixed-side" data-side="B"></div>
+      </div>
+      <div class="row" style="margin:2px 0"><button id="def-fixed-clear">固定をすべて外す</button></div>
+    </details>
     <div class="row muted">相手の応手は、所持に関係なく全カード・両方の向きを全探索します（防御側と衝突するカード・向きは除外）。
       自分の組と相手の応手を、カードの勝率（最初は 50%）の積で重みづけして有望なものから順に評価するので、すぐに暫定の答えが出て、続けるほど正確になります（最後まで続ければ全探索）。</div>
     <div class="row muted" id="def-estimate"></div>
@@ -69,6 +77,12 @@
     </details>`;
   const style = document.createElement('style');
   style.textContent = `
+    .def-fixed-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: start; margin: 4px 0; }
+    .def-fixed-side { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .def-fixed-slot { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    .def-fixed-slot .picker-slot { flex: 1; min-width: 0; }
+    @media (max-width: 1500px) { .def-fixed-side { grid-template-columns: minmax(0, 1fr); } }
+    .fixed-tag { font-size: 11px; color: #fff; background: var(--accent-2); border-radius: 4px; padding: 0 4px; margin-left: 2px; }
     #def-context { font-size: 12px; margin-top: 8px; padding: 6px 8px; border-left: 3px solid var(--accent-2); background: var(--bg); border-radius: 0 6px 6px 0; }
     #def-context:empty, #def-best.empty { display: none; }
     #def-sets td { vertical-align: top; }
@@ -95,13 +109,67 @@
   const cardTxt = (p) => {
     if (!p) return '（なし）';
     const c = cardById(p.id);
-    return `${c.name} [${c.attr || '?'}・${groupShort(c)}]${p.flip ? '（反転）' : ''}`;
+    return `${c.name} [${c.attr || '?'}・${groupShort(c)}]${p.flip ? '（反転）' : ''}${p.fixed ? '［固定］' : ''}`;
   };
   const cardHtml = (p) => {
     if (!p) return '<span class="muted">（なし）</span>';
     const c = cardById(p.id);
-    return `<span class="attr ${c.attr}">${c.attr}</span> <span class="muted">${esc(groupShort(c))}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}`;
+    return `<span class="attr ${c.attr}">${c.attr}</span> <span class="muted">${esc(groupShort(c))}</span> ${esc(c.name)}${p.flip ? ' <b>(反転)</b>' : ''}${p.fixed ? ' <span class="fixed-tag">固定</span>' : ''}`;
   };
+
+  // ---- 固定するカード（A・B それぞれ最大 3 枚。向きつき） ---------------------------------
+  const FIXED_KEY = 'defFixed';
+  const fixed = (() => {
+    const v = store.get(FIXED_KEY, null);
+    const norm = (list) => [0, 1, 2].map((k) => (list?.[k]?.id ? { id: list[k].id, flip: !!list[k].flip } : null));
+    return { A: norm(v?.A), B: norm(v?.B) };
+  })();
+  const fixedPickers = { A: [], B: [] };
+  const fixedList = (side) => fixed[side].filter((f) => f && cardById(f.id) && !cardById(f.id).retired && cardById(f.id).moves.length);
+  function saveFixed() {
+    store.set(FIXED_KEY, fixed);
+    updateEstimate();
+  }
+  function renderFixed() {
+    for (const side of ['A', 'B']) {
+      const wrap = $(`.def-fixed-side[data-side="${side}"]`);
+      wrap.innerHTML = '';
+      fixedPickers[side] = [0, 1, 2].map((k) => {
+        const slot = document.createElement('div');
+        slot.className = 'def-fixed-slot';
+        slot.innerHTML = '<div class="picker-slot"></div><label class="nw" title="固定するカードの向き"><input type="checkbox"> 反転</label>';
+        const flipBox = slot.querySelector('input');
+        const picker = new CardPicker({
+          noneLabel: '（固定しない）',
+          getItems: () => {
+            // 同じ側のほかの枠で固定しているカードは選べない
+            const taken = new Set(fixed[side].filter((f, j) => f && j !== k).map((f) => f.id));
+            return activeCards().filter((c) => c.slot === side && c.moves.length).map((c) => {
+              const notes = [];
+              if (!isOwned(c)) notes.push('未所持');
+              if (taken.has(c.id)) notes.push('ほかの枠で固定中');
+              return { id: c.id, attr: c.attr || '', group: groupShort(c), groupLabel: groupName(c), name: c.name, rank: rankOf(c.id),
+                note: notes.join('・'), disabled: taken.has(c.id) };
+            });
+          },
+          describe: (id) => { const c = cardById(id); return c && { attr: c.attr || '', group: groupShort(c), name: c.name }; },
+          onChange: (id) => {
+            fixed[side][k] = id ? { id, flip: flipBox.checked } : null;
+            flipBox.disabled = !id;
+            saveFixed();
+          },
+        });
+        picker.value = fixed[side][k]?.id || null;
+        flipBox.checked = !!fixed[side][k]?.flip;
+        flipBox.disabled = !fixed[side][k];
+        flipBox.onchange = () => { if (fixed[side][k]) { fixed[side][k].flip = flipBox.checked; saveFixed(); } };
+        slot.querySelector('.picker-slot').appendChild(picker.el);
+        wrap.appendChild(slot);
+        return picker;
+      });
+    }
+  }
+
 
   // ---- 候補 -----------------------------------------------------------------
   const stoneSig = (card, key, flip) => JSON.stringify(placedCardStones(card, key, flip).map((s) => [s.c, s.x, s.y]).sort());
@@ -132,22 +200,40 @@
   function currentCandidates() {
     const attrs = new Set($$('.def-attr').filter((x) => x.checked).map((x) => x.value));
     const ownedOnly = $('#def-owned').checked, flip = $('#def-flip').checked, minRank = +$('#def-min-rank').value || 0;
-    const myA = myCards('TR', attrs, ownedOnly, minRank), myB = myCards('BL', attrs, ownedOnly, minRank);
-    // バッグに入れる組: 両方反転なし / A のみ反転（B は反転なしで固定）
-    const items = [];
-    for (const a of myA) for (const b of myB) {
-      items.push({ a: { id: a.id, flip: false }, b: { id: b.id, flip: false } });
-      if (flip && !a.sym) items.push({ a: { id: a.id, flip: true }, b: { id: b.id, flip: false } });
+    const isSym = (key, id) => { const c = cardById(id); return stoneSig(c, key, false) === stoneSig(c, key, true); };
+    const fixedA = fixedList('A'), fixedB = fixedList('B');
+    // 自分の候補 = 固定したカード（指定の向きだけ）+ 条件に合うほかのカード（固定が 3 枚なら追加しない）
+    const side = (key, fixedSide) => {
+      const ids = new Set(fixedSide.map((f) => f.id));
+      const fixedRows = fixedSide.map((f) => { const sym = isSym(key, f.id); return { id: f.id, flip: sym ? false : f.flip, sym, fixed: true }; });
+      const free = fixedSide.length >= SET_SIZE ? [] : myCards(key, attrs, ownedOnly, minRank).filter((c) => !ids.has(c.id));
+      const freeRows = free.flatMap((c) => (c.sym || !flip ? [false] : [false, true]).map((f) => ({ id: c.id, flip: f, sym: c.sym })));
+      const cardsInfo = [...fixedSide.map((f) => ({ id: f.id, sym: isSym(key, f.id), fixed: true })), ...free];
+      return { rows: [...fixedRows, ...freeRows], cards: cardsInfo };
+    };
+    const A = side('TR', fixedA), B = side('BL', fixedB);
+    // バッグに入れる組（評価するのは B を反転なしにした形だけ。(A^x, B^y) は (A^(x xor y), B) と同義）
+    const items = [], seen = new Set();
+    for (const a of A.rows) for (const b of B.rows) {
+      const e = a.sym ? false : (a.flip !== (b.sym ? false : b.flip));
+      const key = `${a.id}|${e ? 1 : 0}|${b.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ a: { id: a.id, flip: e }, b: { id: b.id, flip: false } });
     }
-    return { myA, myB, flip, items, oppA: listCandidates('TL'), oppB: listCandidates('BR') };
+    return { myA: A.cards, myB: B.cards, rowsA: A.rows, colsB: B.rows, fixedA, fixedB, flip, items,
+      oppA: listCandidates('TL'), oppB: listCandidates('BR') };
   }
+
 
   function updateEstimate() {
     if (!cards.length) return;
-    const { myA, myB, items, oppA, oppB } = currentCandidates();
+    const { myA, myB, items, oppA, oppB, fixedA, fixedB } = currentCandidates();
     const upper = items.length * oppA.length * oppB.length;
     const rate = store.get(RATE_KEY, 0);
-    let text = `自分の候補: 右上 (A) ${myA.length} 枚 × 左下 (B) ${myB.length} 枚 → 向き込み ${items.length} 組（両方反転なし・A のみ反転）。` +
+    const a = fixedA.length, b = fixedB.length;
+    $('#def-fixed-summary').textContent = a || b ? `（右上 ${a} 枚・左下 ${b} 枚を固定）` : '';
+    let text = `自分の候補: 右上 (A) ${myA.length} 枚${a ? `（うち固定 ${a}）` : ''} × 左下 (B) ${myB.length} 枚${b ? `（うち固定 ${b}）` : ''} → 向き込み ${items.length} 組。` +
       `相手の応手: 左上 ${oppA.length} × 右下 ${oppB.length}。全部評価すると最大 ${upper.toLocaleString()} 局面`;
     if (rate) text += `（全探索は直近の速度 ${rate.toFixed(0)} 局面/sで約 ${fmtSec(upper / rate)}。有望なものから評価するので、途中で中止しても暫定の答えが出ます）`;
     $('#def-estimate').textContent = text;
@@ -156,7 +242,7 @@
   $('#def-owned').addEventListener('change', updateEstimate);
   $('#def-min-rank').addEventListener('change', updateEstimate);
   $('#def-flip').addEventListener('change', updateEstimate);
-  $$('.tabs button').forEach((b) => b.addEventListener('click', () => { if (b.dataset.tab === 'def') updateEstimate(); }));
+  $$('.tabs button').forEach((b) => b.addEventListener('click', () => { if (b.dataset.tab === 'def') { renderFixed(); updateEstimate(); } }));
 
   // ---- 実行中の経過 ------------------------------------------------------------
   const live = {
@@ -216,53 +302,74 @@
    * A から別カード 3 つ、B から別カード 3 つを選び、9 マスの合計が最大の組み合わせを上位 topN 件返す。
    */
   function bestSets(rowsA, colsB, M, topN = 10) {
-    const nA = rowsA.length, nB = colsB.length;
-    // 列（B の候補）→ カード番号。同じカードの向き違いは同じ番号
+    const nB = colsB.length;
+    // 固定した行・列（fixed: true）は必ず含め、残りの枚数だけを選ぶ
+    const fixedR = rowsA.map((r, i) => (r.fixed ? i : -1)).filter((i) => i >= 0);
+    const freeR = rowsA.map((r, i) => (r.fixed ? -1 : i)).filter((i) => i >= 0);
+    const fixedC = colsB.map((c, i) => (c.fixed ? i : -1)).filter((i) => i >= 0);
+    const needR = SET_SIZE - fixedR.length, needC = SET_SIZE - fixedC.length;
+    if (needR < 0 || needC < 0) return [];
+    // 列（B の候補）→ カード番号。同じカードの向き違いは同じ番号（固定した列は除く）
     const cardIndex = new Map();
-    const colCard = Int32Array.from(colsB, (p) => { if (!cardIndex.has(p.id)) cardIndex.set(p.id, cardIndex.size); return cardIndex.get(p.id); });
+    const colCard = Int32Array.from(colsB, (p) => {
+      if (p.fixed) return -1;
+      if (!cardIndex.has(p.id)) cardIndex.set(p.id, cardIndex.size);
+      return cardIndex.get(p.id);
+    });
     const nCards = cardIndex.size;
     const bestVal = new Float64Array(nCards), bestCol = new Int32Array(nCards);
     const top = [];
-    for (let r1 = 0; r1 < nA; r1++) for (let r2 = r1 + 1; r2 < nA; r2++) {
-      if (rowsA[r2].id === rowsA[r1].id) continue;
-      for (let r3 = r2 + 1; r3 < nA; r3++) {
-        if (rowsA[r3].id === rowsA[r1].id || rowsA[r3].id === rowsA[r2].id) continue;
-        // 3 枚の A を固定すると、B は列ごとに独立 → カードごとに良いほうの向きを取り、上位 3 カード
-        bestVal.fill(-Infinity);
-        for (let c = 0; c < nB; c++) {
-          const a = M[r1][c], b = M[r2][c], d = M[r3][c];
-          const v = a == null || b == null || d == null ? -Infinity : a + b + d;
-          const k = colCard[c];
-          if (v > bestVal[k]) { bestVal[k] = v; bestCol[k] = c; }
-        }
-        let k1 = -1, k2 = -1, k3 = -1;
-        for (let k = 0; k < nCards; k++) {
-          const v = bestVal[k];
-          if (k1 < 0 || v > bestVal[k1]) { k3 = k2; k2 = k1; k1 = k; }
-          else if (k2 < 0 || v > bestVal[k2]) { k3 = k2; k2 = k; }
-          else if (k3 < 0 || v > bestVal[k3]) { k3 = k; }
-        }
-        if (k3 < 0) continue;
-        const total = bestVal[k1] + bestVal[k2] + bestVal[k3];
-        if (!Number.isFinite(total)) continue;
-        if (top.length < topN || total > top[top.length - 1].total) {
-          top.push({ total, rows: [r1, r2, r3], cols: [bestCol[k1], bestCol[k2], bestCol[k3]] });
-          top.sort((x, y) => y.total - x.total);
-          if (top.length > topN) top.pop();
-        }
+    const evalRows = (rows) => {
+      // A の 3 枚を決めると、B は列ごとに独立 → 固定した列の合計 + カードごとに良いほうの向きの上位 needC カード
+      let total = 0;
+      for (const c of fixedC) {
+        let v = 0;
+        for (const r of rows) { const x = M[r][c]; if (x == null) return; v += x; }
+        total += v;
       }
-    }
+      bestVal.fill(-Infinity);
+      for (let c = 0; c < nB; c++) {
+        const k = colCard[c];
+        if (k < 0) continue;
+        let v = 0;
+        for (const r of rows) { const x = M[r][c]; if (x == null) { v = -Infinity; break; } v += x; }
+        if (v > bestVal[k]) { bestVal[k] = v; bestCol[k] = c; }
+      }
+      const picked = [];
+      for (let t = 0; t < needC; t++) {
+        let best = -1;
+        for (let k = 0; k < nCards; k++) if (!picked.includes(k) && (best < 0 || bestVal[k] > bestVal[best])) best = k;
+        if (best < 0 || !Number.isFinite(bestVal[best])) return;
+        picked.push(best);
+        total += bestVal[best];
+      }
+      if (top.length < topN || total > top[top.length - 1].total) {
+        top.push({ total, rows: [...rows], cols: [...fixedC, ...picked.map((k) => bestCol[k])] });
+        top.sort((x, y) => y.total - x.total);
+        if (top.length > topN) top.pop();
+      }
+    };
+    // 残りの A を needR 枚（別のカード）選ぶ組み合わせを列挙
+    const chosen = [];
+    const rec = (from) => {
+      if (chosen.length === needR) { evalRows([...fixedR, ...chosen]); return; }
+      for (let t = from; t < freeR.length; t++) {
+        const r = freeR[t];
+        if (chosen.some((q) => rowsA[q].id === rowsA[r].id)) continue;
+        chosen.push(r); rec(t + 1); chosen.pop();
+      }
+    };
+    rec(0);
     return top.map((t) => ({ ...t, ev: t.total / (SET_SIZE * SET_SIZE) }));
   }
+
 
   /**
    * 評価済みの組（cells: "aId|aFlip|bId" → cell、B は反転なし）から、選択用の行列を作る。
    * 行 = A のカード × 向き、列 = B のカード × 向き。(A^x, B^y) は (A^(x xor y), B) と同義として値を引く。
    */
   function buildMatrix(cand, cells) {
-    const flips = cand.flip ? [false, true] : [false];
-    const rowsA = cand.myA.flatMap((a) => (a.sym ? [false] : flips).map((flip) => ({ id: a.id, flip, sym: a.sym })));
-    const colsB = cand.myB.flatMap((b) => (b.sym ? [false] : flips).map((flip) => ({ id: b.id, flip, sym: b.sym })));
+    const { rowsA, colsB } = cand;  // 固定したカードは指定の向きだけ（fixed: true）
     const lookup = (a, b) => {
       const e = a.sym ? false : (a.flip !== (b.sym ? false : b.flip));
       return cells.get(`${a.id}|${e ? 1 : 0}|${b.id}`) || null;
@@ -401,7 +508,7 @@
     const cand = currentCandidates();
     const { myA, myB, items, oppA, oppB } = cand;
     if (myA.length < SET_SIZE || myB.length < SET_SIZE) {
-      alert(`自分の候補が足りません（A・B それぞれ ${SET_SIZE} 枚以上必要です）。属性や所持の条件を見直してください。`);
+      alert(`自分の候補が足りません（固定したカードと合わせて、A・B それぞれ ${SET_SIZE} 枚以上必要です）。属性や所持の条件を見直してください。`);
       return;
     }
     await refreshEngineInfo();
@@ -418,6 +525,8 @@
     const upper = items.length * nC * nD;
     const ctxLines = [
       `自分（防御・黒）の候補: 右上 (A) ${myA.length} 枚・左下 (B) ${myB.length} 枚（向き込み ${items.length} 組: 両方反転なし・A のみ反転）`,
+      `固定: ${cand.fixedA.length || cand.fixedB.length
+        ? `右上 ${cand.fixedA.map((f) => cardTxt(f)).join('、') || 'なし'} / 左下 ${cand.fixedB.map((f) => cardTxt(f)).join('、') || 'なし'}` : 'なし'}`,
       `条件: 属性 ${$$('.def-attr').filter((x) => x.checked).map((x) => x.value).join('・') || 'なし'} / ${$('#def-owned').checked ? '所持カードのみ' : '未所持も含む'}${+$('#def-min-rank').value ? ` / ランク ★${$('#def-min-rank').value}${$('#def-min-rank').value === '5' ? '' : ' 以上'}` : ''} / ${cand.flip ? '向きも探索' : '向きは表示通り'}`,
       `相手（挑戦・白）の応手: 全カード 左上 ${nC} × 右下 ${nD}（向き込み）から、有望な応手を重みつきで順に評価（全部で最大 ${upper.toLocaleString()} 局面）`,
       `エンジン: ${engineText()} / ${+$('#visits').value || 1} visits / コミ ${KOMI}（アゲハマで調整）・日本ルール / 選択確率 A・B 独立に各 1/${SET_SIZE}`,
@@ -598,6 +707,9 @@
   }
 
   renderBest();
+  renderFixed();
+  saveFixed();
+  $('#def-fixed-clear').onclick = () => { fixed.A = [null, null, null]; fixed.B = [null, null, null]; renderFixed(); saveFixed(); };
   window.defense = { bestSets, buildMatrix, clear: clearDefense };  // テスト・デバッグ用
   $('#def-run').onclick = () => runDefense();
   $('#def-cancel').onclick = () => { st.cancel = true; abortAnalyze(); };
