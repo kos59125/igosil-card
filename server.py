@@ -798,6 +798,12 @@ def fetch_page(url):
 # ---------------------------------------------------------------------------
 
 class Handler(SimpleHTTPRequestHandler):
+    # HTTP/1.1 で接続を使い回す（keep-alive）。最適化は解析リクエストを大量に送るので、
+    # リクエストごとに接続を閉じると TIME_WAIT のソケットがたまり、Windows ではポートが枯渇して
+    # 「Failed to fetch」（net::ERR_NO_BUFFER_SPACE）になる。応答には必ず長さ（Content-Length か chunked）を付ける
+    protocol_version = "HTTP/1.1"
+    timeout = 300  # 使われなくなった接続を閉じるまでの秒数
+    disable_nagle_algorithm = True  # 接続を使い回すと、小さな応答が Nagle で数十ミリ秒待たされるため
     engine = None
     cards_lock = threading.Lock()
     engine_lock = threading.Lock()
@@ -832,14 +838,25 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
+    def parse_request(self):
+        self._raw_body = None  # 同じ接続で次のリクエストが来るたびに読み直す
+        return super().parse_request()
+
+    def _body_raw(self):
+        """リクエストの本文（1 回だけ読む）"""
+        if self._raw_body is None:
+            length = int(self.headers.get("Content-Length") or 0)
+            self._raw_body = self.rfile.read(length) if length > 0 else b""
+        return self._raw_body
+
     def _body(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        if not length:
-            return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        raw = self._body_raw()
+        return json.loads(raw.decode("utf-8")) if raw else {}
 
     def do_GET(self):
         if self.path == "/api/status":
@@ -859,6 +876,7 @@ class Handler(SimpleHTTPRequestHandler):
             # <link rel="icon"> を見ずに /favicon.ico を取りに来るブラウザ向け
             self.send_response(HTTPStatus.MOVED_PERMANENTLY)
             self.send_header("Location", "/favicon.svg")
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         return super().do_GET()
@@ -882,9 +900,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._update_cards()
             if self.path.startswith("/api/katago/"):
                 return self._katago_post(self.path[len("/api/katago/"):])
+            self._body_raw()  # 本文を読み捨ててから応答する（接続を次のリクエストに使い回すため）
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except Exception as e:  # noqa: BLE001 - UI にそのまま表示する
             log("error:", repr(e))
+            self.close_connection = True
             self._json({"error": str(e)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     # ---- KataGo の導入 ----
@@ -937,24 +957,31 @@ class Handler(SimpleHTTPRequestHandler):
         positions = body.get("positions", [])
         if not body.get("stream"):
             return self._json({"results": self.engine.analyze(positions, params)})
-        # 1 局面終わるごとに 1 行 (NDJSON) 送り、UI で経過を表示できるようにする
+        # 1 局面終わるごとに 1 行 (NDJSON) 送り、UI で経過を表示できるようにする。
+        # 長さが事前に分からないので chunked で送り、接続は次のリクエストに使い回す
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "close")
+        self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
-        self.close_connection = True
 
         def send(obj):
-            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+            data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
             self.wfile.flush()
         try:
-            self.engine.analyze(positions, params, on_result=lambda i, r: send({"i": i, "result": r}))
-            send({"done": True})
-        except (BrokenPipeError, ConnectionResetError):
+            try:
+                self.engine.analyze(positions, params, on_result=lambda i, r: send({"i": i, "result": r}))
+                send({"done": True})
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                raise
+            except Exception as e:  # noqa: BLE001
+                send({"error": str(e)})
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             log("analyze: クライアントが切断しました")
-        except Exception as e:  # noqa: BLE001
-            send({"error": str(e)})
+            self.close_connection = True
 
     def _update_cards(self):
         body = self._body()

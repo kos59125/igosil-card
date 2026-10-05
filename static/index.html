@@ -614,11 +614,30 @@ async function analyze(positions, onEach, { abortable = false } = {}) {
   const ctrl = new AbortController();
   if (abortable) analyzeAborts.add(ctrl);  // 最適化の「中止」で打ち切る対象
   try {
-    return await analyzeStream(positions, onEach, ctrl);
+    // 通信エラー（Failed to fetch。サーバーの再起動中や、Windows で一時的にソケットが足りないときなど）は、
+    // 結果がまだ届いていない局面だけを、少し待って送り直す
+    const results = new Array(positions.length);
+    let count = 0;
+    for (let attempt = 0; ; attempt++) {
+      const rest = positions.map((_, i) => i).filter((i) => !results[i]);
+      try {
+        await analyzeStream(rest.map((i) => positions[i]), (k, r) => {
+          results[rest[k]] = r;
+          onEach?.(rest[k], r, ++count);
+        }, ctrl);
+        return results.map((r) => r || { error: '結果がありません' });
+      } catch (e) {
+        if (!(e instanceof TypeError) || ctrl.signal.aborted || attempt >= ANALYZE_RETRIES) throw e;
+        console.warn(`解析リクエストの通信エラー（${e.message}）。${2 ** attempt} 秒後に送り直します`);
+        await new Promise((res) => setTimeout(res, 1000 * 2 ** attempt));
+        if (ctrl.signal.aborted) throw new DOMException('中止しました', 'AbortError');
+      }
+    }
   } finally {
     analyzeAborts.delete(ctrl);
   }
 }
+const ANALYZE_RETRIES = 5;  // 通信エラーのときに送り直す回数（1, 2, 4, 8, 16 秒待つ）
 async function analyzeStream(positions, onEach, ctrl) {
   const res = await fetch('/api/analyze', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
