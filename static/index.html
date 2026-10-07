@@ -1068,7 +1068,7 @@ function describeParams(tl, br) {
   return [
     `相手: 右上 (A) ${cornerText('TR')} / 左下 (B) ${cornerText('BL')}`,
     `エンジン: ${engineText()} / ${+$('#visits').value || 1} visits / コミ ${KOMI}（アゲハマで調整）・日本ルール`,
-    `探索: 全探索 / 候補 左上 ${tl.length}・右下 ${br.length}（反転を含む）`,
+    `探索: 全探索 / 候補 左上 ${tl.length}・右下 ${br.length}（反転を含む）。星の高い所持カードの組み合わせから順に評価`,
     `条件: 属性 ${attrs} / ${opts.join(' / ')}`,
   ];
 }
@@ -1155,6 +1155,10 @@ async function optimize() {
     log('最適化開始');
     const pls = [];
     for (const a of tl) for (const b of br) pls.push({ ...base, TL: a, BR: b });
+    // 星（ランク）の高い所持カードの組み合わせから評価する（中止しても、使うカードの結果が先にそろう）
+    const prio = new Map(pls.map((pl) => [pl, [cardPriority(pl.TL) + cardPriority(pl.BR), Math.min(cardPriority(pl.TL), cardPriority(pl.BR))]]));
+    pls.sort((x, y) => prio.get(y)[0] - prio.get(x)[0] || prio.get(y)[1] - prio.get(x)[1]);
+    log('評価の順序: 所持カードの星の合計が高い組み合わせから（★n = n + 1 点、所持で星なし = 1 点、未所持 = 0 点。同点なら低いほうのカードの点が高い順）');
     resetResults('全探索: 解析中（結果が届くたびに順位の位置へ追加）');
     const results = await evaluateMany(pls, (d, n) => { bar.style.width = (100 * d / n) + '%'; info.textContent = `${d} / ${n}`; }, '全探索 ', ctx);
     const errors = results.errors || 0;
@@ -1179,6 +1183,11 @@ async function optimize() {
   } finally {
     if (alive()) { optRunning = false; $('#btn-optimize').disabled = false; $('#btn-cancel').disabled = true; }
   }
+}
+/** 挑戦の最適化で評価する順序の点数: ★n の所持カード = n + 1、星なしの所持カード = 1、未所持・なし = 0 */
+function cardPriority(p) {
+  const c = p && cardById(p.id);
+  return c && isOwned(c) ? 1 + (rankOf(c.id) || 0) : 0;
 }
 /** 最新のエンジン情報（KataGo のバージョン・モデル）を取得する */
 async function refreshEngineInfo() {
