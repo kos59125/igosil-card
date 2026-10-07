@@ -57,6 +57,7 @@ class CardPicker {
     this.box.addEventListener('mousedown', (ev) => {
       if (ev.target.closest('.cp-clear') || ev.target.closest('.cp-chip-x')) return;
       if (!this.isOpen) { ev.preventDefault(); this.open(); }
+      else if (ev.target.closest('.cp-caret')) { ev.preventDefault(); this.close(); }  // 開いているときに ▾ を押すと閉じる
     });
     el.querySelector('.cp-clear').addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -129,7 +130,8 @@ class CardPicker {
     const up = below < 260 && above > below;
     const room = Math.max(160, up ? above : below);
     Object.assign(this.pop.style, { position: 'fixed', left: left + 'px', width: width + 'px', maxHeight: room + 'px',
-      top: up ? '' : (r.bottom + 2) + 'px', bottom: up ? (vh - r.top + 2) + 'px' : '' });
+      // 使わない側は auto にする（空にすると CSS の top: calc(100% + 2px) が残り、上に開いたとき画面外に出る）
+      top: up ? 'auto' : (r.bottom + 2) + 'px', bottom: up ? (vh - r.top + 2) + 'px' : 'auto' });
   }
   /** 絞り込み専用: 条件が変わったことを知らせる */
   fireFilter() { if (this.mode === 'filter') { this.renderValue(); this.onFilter?.(); } }

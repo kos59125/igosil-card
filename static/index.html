@@ -32,14 +32,18 @@ header h1 { font-size: 16px; margin: 0; }
 .status.ok .dot { background: var(--ok); } .status.bad .dot { background: var(--bad); }
 .status.loading .dot { background: #e0a800; animation: blink 1s ease-in-out infinite alternate; }
 @keyframes blink { from { opacity: 1; } to { opacity: .3; } }
-/* 画面の高さに収める: ヘッダー + 3 列（盤面 | 配置・勝率 | タブ）。各列は中でスクロールする */
-:root { --board-size: min(calc(100vh - 86px), 40vw, 680px); }
+/* 画面の高さに収める: ヘッダー + 3 列（盤面と配置 | 解析 | タブ）。各列は中でスクロールする。
+   盤面の下に 4 隅の配置（2 × 2）とボタンを置くので、その高さ（--below-board）を盤面から引く */
+:root { --below-board: 204px; --board-size: min(calc(100vh - 86px - var(--below-board)), 40vw, 680px); }
 html, body { height: 100%; }
 body { display: flex; flex-direction: column; overflow: hidden; }
 header { flex: none; }
-main { flex: 1; min-height: 0; display: grid; grid-template-columns: auto minmax(300px, 340px) minmax(360px, 1fr); gap: 12px; padding: 12px; }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: auto minmax(260px, 320px) minmax(360px, 1fr); gap: 12px; padding: 12px; }
 main > .panel { min-height: 0; overflow: auto; }
-#board-panel { padding: 8px; overflow: hidden; }
+#board-panel { padding: 8px; }
+#board-panel > * { width: var(--board-size); }
+#board-panel .row { margin: 6px 0 2px; gap: 6px; }
+#board-panel .row button { padding: 3px 8px; font-size: 13px; }
 #tabs-panel { display: flex; flex-direction: column; overflow: hidden; }
 #tabs-panel > .tab.active { flex: 1; min-height: 0; overflow: auto; }
 #tab-opt.active { display: flex; flex-direction: column; }
@@ -66,7 +70,7 @@ label { cursor: pointer; }
 .muted { color: var(--muted); font-size: 12px; }
 #board-wrap { position: relative; }
 #board { width: var(--board-size); height: var(--board-size); display: block; }
-.corners { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.corners { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }  /* 左上 右上 / 左下 右下 */
 .corner { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; min-width: 0; }
 .corner-row { display: flex; align-items: center; gap: 8px; }
 .corner-row .picker-slot { flex: 1; min-width: 0; }
@@ -83,7 +87,8 @@ label { cursor: pointer; }
 .cp:not(.open) .cp-input { position: absolute; opacity: 0; pointer-events: none; width: 1px; }
 .cp-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .cp-clear, .cp-caret { position: absolute; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--muted); padding: 0 4px; cursor: pointer; }
-.cp-clear { right: 22px; } .cp-caret { right: 6px; pointer-events: none; }
+.cp-clear { right: 22px; } .cp-caret { right: 6px; }
+.cp:not(.open) .cp-box { cursor: pointer; }  /* 閉じているときは枠のどこを押しても開く */
 .cp-chip { display: inline-flex; align-items: center; gap: 3px; padding: 0 4px 0 6px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); font-size: 12px; color: var(--text); }
 .cp-chip.attr { border-color: transparent; color: #1f2328; font-weight: 600; }
 .cp-chip-x { cursor: pointer; opacity: .7; padding: 0 2px; } .cp-chip-x:hover { opacity: 1; }
@@ -179,22 +184,26 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 </header>
 
 <main>
+  <!-- 左: 盤面と配置（4 隅のカード・クリア・SGF・表示） -->
   <section class="panel" id="board-panel">
     <div id="board-wrap"><svg id="board" viewBox="0 0 400 400" aria-label="盤面"></svg></div>
-  </section>
-
-  <section class="panel" id="control-panel">
     <div class="corners" id="corners"></div>
-    <div class="muted" title="防御側（右上・左下）の配置と石が衝突するカード・向きは、挑戦側（左上・右下）には置けません">グレーのカード・反転は、防御側と衝突するため置けません。</div>
-    <div class="msg" id="placement-note"></div>
     <div class="row">
-      <button id="btn-eval" class="primary">勝率を計算</button>
       <button id="btn-clear-mine" title="左上・右下（自分）のカードを外す">自分の配置をクリア</button>
       <button id="btn-clear-all" title="4 隅すべてのカードを外す">すべてクリア</button>
       <button id="btn-copy-sgf" title="現在の初期配置を SGF としてクリップボードにコピー（KM は実質コミ）">SGF をコピー</button>
-      <span class="muted" id="copy-note"></span>
-      <label><input type="checkbox" id="auto-eval" checked> 変更時に自動計算</label>
       <label><input type="checkbox" id="show-numbers"> 手順番号を表示</label>
+      <span class="muted" id="copy-note"></span>
+    </div>
+    <div class="muted" title="防御側（右上・左下）の配置と石が衝突するカード・向きは、挑戦側（左上・右下）には置けません">グレーのカード・反転は、防御側と衝突するため置けません。</div>
+    <div class="msg" id="placement-note"></div>
+  </section>
+
+  <!-- 中央: 解析（勝率の計算と結果） -->
+  <section class="panel" id="control-panel">
+    <div class="row" style="margin-top:0">
+      <button id="btn-eval" class="primary">勝率を計算</button>
+      <label><input type="checkbox" id="auto-eval" checked> 変更時に自動計算</label>
     </div>
     <div class="result">
       <div><div class="muted" id="wr-label">白（自分）の勝率</div><div class="big" id="wr">—</div></div>
