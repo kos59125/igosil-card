@@ -34,7 +34,7 @@ header h1 { font-size: 16px; margin: 0; }
 @keyframes blink { from { opacity: 1; } to { opacity: .3; } }
 /* 画面の高さに収める: ヘッダー + 3 列（盤面と配置 | 解析 | タブ）。各列は中でスクロールする。
    盤面の下に 4 隅の配置（2 × 2）とボタンを置くので、その高さ（--below-board）を盤面から引く */
-:root { --below-board: 204px; --board-size: min(calc(100vh - 86px - var(--below-board)), 40vw, 680px); }
+:root { --below-board: 186px; --board-size: min(calc(100vh - 86px - var(--below-board)), 40vw, 680px); }
 html, body { height: 100%; }
 body { display: flex; flex-direction: column; overflow: hidden; }
 header { flex: none; }
@@ -195,7 +195,6 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <label><input type="checkbox" id="show-numbers"> 手順番号を表示</label>
       <span class="muted" id="copy-note"></span>
     </div>
-    <div class="muted" title="防御側（右上・左下）の配置と石が衝突するカード・向きは、挑戦側（左上・右下）には置けません">グレーのカード・反転は、防御側と衝突するため置けません。</div>
     <div class="msg" id="placement-note"></div>
   </section>
 
