@@ -144,6 +144,8 @@ tr.row-new { animation: row-in 1.8s ease-out; }
 #opt-results { table-layout: fixed; }
 #opt-results tbody tr.rrow { height: 30px; }
 #opt-results tbody tr.rrow td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-top: 0; padding-bottom: 0; }
+#opt-results tbody tr.rrow.current td { font-weight: 600; }
+#opt-results tbody tr.rrow.current td:first-child { box-shadow: inset 4px 0 0 var(--accent-2); }
 #opt-results tbody tr.spacer td { border: none; padding: 0; }
 @media (max-width: 1400px) { .result-filters { grid-template-columns: auto 1fr; } }
 .progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
@@ -819,6 +821,7 @@ function renderAll() {
   drawBoard($('#board'), list, { quadrants: true, labels: true, conflicts: pos.conflicts, numbers: $('#show-numbers').checked });
   updateBadges();
   renderMatchup();
+  if (lastResults.length) scheduleResults();  // 結果の表の「盤面に反映中」の印を合わせる
   const pr = pos.prisoners;
   $('#prisoners').textContent = `アゲハマ: 黒 ${pr.B} / 白 ${pr.W}　→ 実質コミ ${pos.komi}（${KOMI} ${pr.W - pr.B >= 0 ? '+' : '−'} ${Math.abs(pr.W - pr.B)}）`;
   return pos;
@@ -1251,14 +1254,18 @@ function drawResults() {
   const now = performance.now();
   let fresh = false;
   const rows = [];
+  const cur = sameCorner(placement.TL) + '|' + sameCorner(placement.BR);
+  drawnResults = [];
   for (let v = start; v < end; v++) {
     const k = resultsView[v], r = lastResults[k];
+    drawnResults.push(r);
     const m = matchupScore(r.pl);
     const age = r._t ? now - r._t : Infinity;
     let style = '';
     if (age < FRESH_MS) { fresh = true; style = ` style="background:color-mix(in srgb, var(--flash) ${Math.round(100 * (1 - age / FRESH_MS))}%, transparent)"`; }
     const tip = `${cardItem(r.pl.TL?.id)?.name || '（なし）'}${r.pl.TL?.flip ? '（反転）' : ''} / ${cardItem(r.pl.BR?.id)?.name || '（なし）'}${r.pl.BR?.flip ? '（反転）' : ''}`;
-    rows.push(`<tr class="rrow clickable" data-k="${k}"${style} title="${esc(tip)}"><td>${k + 1}</td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
+    const isCur = sameCorner(r.pl.TL) + '|' + sameCorner(r.pl.BR) === cur;
+    rows.push(`<tr class="rrow clickable${isCur ? ' current' : ''}" data-d="${drawnResults.length - 1}"${style} title="${esc(tip)}"><td>${k + 1}</td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
       <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td><td>${placementCell(r.pl.TL)}</td><td>${placementCell(r.pl.BR)}</td>
       <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td></tr>`);
   }
@@ -1294,15 +1301,21 @@ function renderResults(results, caption = '') {
   $('#opt-caption').textContent = caption;
   scheduleResults();
 }
-$('#opt-results').addEventListener('click', (ev) => {
-  const tr = ev.target.closest('tr[data-k]'); if (!tr) return;
-  const r = lastResults[+tr.dataset.k];
+// 解析中は行を頻繁に描き直すので、click（押して離すまで同じ要素が必要）ではなく押した時点で反映する。
+// 結果の挿入で順位（配列の位置）がずれるため、行は描いた時点の結果（drawnResults）で引く
+let drawnResults = [];
+const sameCorner = (p) => (p ? `${p.id}:${p.flip ? 1 : 0}` : '-');
+$('#opt-results').addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0) return;
+  const tr = ev.target.closest('tr[data-d]'); if (!tr) return;
+  const r = drawnResults[+tr.dataset.d];
   if (!r) return;
   placement.TL = r.pl.TL; placement.BR = r.pl.BR;
   store.set('placement', placement);
   syncCornerInputs(); updateAvailability(); renderAll();
   $('#placement-note').textContent = '';
   setEval(r);
+  scheduleResults();  // 盤面に反映中の行に印を付ける
 });
 
 // ---------------------------------------------------------------------------
