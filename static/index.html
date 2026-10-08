@@ -1497,7 +1497,11 @@ function clearPlacement(keys) {
   for (const k of keys) placement[k] = null;
   onPlacementChange();
 }
-$('#btn-clear-mine').onclick = () => clearPlacement(['TL', 'BR']);
+$('#btn-clear-mine').onclick = () => {
+  // 自分の隅（左上・右下）のカード選択の絞り込み条件も外す
+  for (const key of ['TL', 'BR']) cornerPickers[key]?.clearFilter();
+  clearPlacement(['TL', 'BR']);
+};
 $('#btn-clear-all').onclick = () => {
   clearOptimization();
   // 4 隅のカード選択の絞り込み条件（属性・動物・ランクのチップと入力文字）も外す
