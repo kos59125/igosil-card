@@ -1498,7 +1498,12 @@ function clearPlacement(keys) {
   onPlacementChange();
 }
 $('#btn-clear-mine').onclick = () => clearPlacement(['TL', 'BR']);
-$('#btn-clear-all').onclick = () => { clearOptimization(); clearPlacement(CORNER_ORDER); };
+$('#btn-clear-all').onclick = () => {
+  clearOptimization();
+  // 4 隅のカード選択の絞り込み条件（属性・動物・ランクのチップと入力文字）も外す
+  for (const key of CORNER_ORDER) cornerPickers[key]?.clearFilter();
+  clearPlacement(CORNER_ORDER);
+};
 
 /** 現在の初期配置を SGF にする。石は AB/AW、KM はアゲハマを織り込んだ実質コミ、手番は黒 */
 function placementSgf() {
