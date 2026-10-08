@@ -61,7 +61,9 @@ class CardPicker {
     });
     el.querySelector('.cp-clear').addEventListener('click', (ev) => {
       ev.stopPropagation();
-      if (this.mode === 'filter') this.clearFilter(); else this.select(null);
+      // 選択を外すときは、絞り込み条件（チップ・入力文字）も外す
+      this.clearFilter();
+      if (this.mode !== 'filter') this.select(null);
     });
     // 文字を入力したら、最初に一致したカードを選択中にする（Enter ですぐ決定できる）
     this.input.addEventListener('input', () => {
