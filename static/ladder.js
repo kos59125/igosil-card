@@ -10,7 +10,7 @@
 const Ladder = (() => {
   const SIZE = 19;
   const MAX_DEPTH = 120;     // 盤の端から端まで伸びても足りる手数
-  const MAX_NODES = 20000;   // 1 回の読みで調べる局面の上限（超えたら「不明」）
+  const MAX_NODES = 4000;    // 1 回の読みで調べる局面の上限（超えたら「不明」）。シチョウなら数百で足りる
   const other = (c) => (c === 'B' ? 'W' : 'B');
   // 読みの途中で見た点。ほかの石を足しても、ここに重ならなければ読みの結果は変わらない
   let touch = null;

@@ -996,7 +996,8 @@
   /** 向き o のシチョウの情報。相手の応手（ci, di）ごとの結果は combo(ci, di) で引く */
   function ladderInfo(o, oppA, oppB) {
     const pos = buildPosition(o.base);
-    const chains = Ladder.find(pos.stones, () => true);
+    // 単独のときに読み切れない連（シチョウの形ではない、複雑な攻め合いなど）は対象にしない
+    const chains = Ladder.find(pos.stones, () => true).filter((ch) => ch.captured != null);
     if (!chains.length) return null;
     const vecEx = (stones) => {
       const t = new Set();
@@ -1076,6 +1077,19 @@
       const t = performance.now();
       o.info = ladderInfo(o, oppA, oppB);
       if (o.info) {
+        // 相手の応手ごとに、シチョウが単独のときと同じか変わるかを分類する（画面が固まらないよう区切る）
+        o.lad[0] = 0;
+        let last = performance.now();
+        for (let j = 1; j < o.ci.length; j++) {
+          const r = o.info.combo(o.ci[j], o.di[j]);
+          o.lad[j] = r && sameVec(r, o.info.base) ? 0 : 1;
+          if (performance.now() - last > 30) {
+            $('#def-live').textContent = `シチョウを分類中（${o.flip ? '反転' : '反転なし'}）… ${j.toLocaleString()} / ${(o.ci.length - 1).toLocaleString()}`;
+            await new Promise((res) => setTimeout(res, 0));
+            if (!alive()) return;
+            last = performance.now();
+          }
+        }
         log(`シチョウ（${o.flip ? '反転' : '反転なし'}）: ${o.info.chains.map((ch, k) => ladderText(ch, o.info.base[k]).text).join('、')}` +
           ` / 相手のカード 1 枚で変わる ${o.info.oppChangers.length} 通り、自分の反対側のカードで変わる ${o.info.partners.length} 通り（${fmtSec((performance.now() - t) / 1000)}）`, run);
       }
