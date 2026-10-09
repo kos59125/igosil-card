@@ -606,16 +606,68 @@ function placementFromKey(key) {
   }
   return pl;
 }
+/**
+ * 局面のキー: 盤面全体を回転・反転（8 通り）して同じ石の並びになる配置は同じ局面なので、同じキーにする。
+ * 石の並びを 8 通りに変換したうちの最小の文字列と、コミ（アゲハマで調整）から作る。衝突する配置は null
+ */
+const positionKeyCache = new Map();
+function positionKey(pl) {
+  const pk = placementKey(pl);
+  if (positionKeyCache.has(pk)) return positionKeyCache.get(pk);
+  let key = null;
+  const pos = buildPosition(pl);
+  if (!pos.conflicts.length && pos.stones.length) {
+    const M = N - 1;
+    const tf = [(x, y) => [x, y], (x, y) => [M - x, y], (x, y) => [x, M - y], (x, y) => [M - x, M - y],
+      (x, y) => [y, x], (x, y) => [M - y, x], (x, y) => [y, M - x], (x, y) => [M - y, M - x]];
+    let best = null;
+    for (const t of tf) {
+      const str = pos.stones.map(([c, x, y]) => { const [u, v] = t(x, y); return `${c}${String(u).padStart(2, '0')}${String(v).padStart(2, '0')}`; }).sort().join('');
+      if (best === null || str < best) best = str;
+    }
+    key = 'pos:' + optCache.key({ stones: best, komi: pos.komi }).slice('igosil.opt.'.length);
+  }
+  positionKeyCache.set(pk, key);
+  return key;
+}
+/** 記録 → 配置（新しい記録は placement に、古い記録はキーそのものに配置を持つ） */
+const recordPlacement = (key, rec) => (rec.placement ? placementFromKey(rec.placement) : key.startsWith('TL=') ? placementFromKey(key) : null);
+let igosilIndex = new Map();  // 局面のキー → { key: 保存のキー, rec, pl }
+function indexIgosil() {
+  igosilIndex = new Map();
+  for (const [key, rec] of Object.entries(igosil)) {
+    const pl = recordPlacement(key, rec);
+    if (!pl || !CORNER_ORDER.every((k) => !pl[k] || cardById(pl[k].id))) continue;
+    const pk = positionKey(pl);
+    if (!pk) continue;
+    const cur = igosilIndex.get(pk);
+    if (!cur || (rec.at || '') > (cur.rec.at || '')) igosilIndex.set(pk, { key, rec, pl });  // 同じ局面が複数あれば新しいほう
+  }
+}
 const placementLabel = (pl) => CORNER_ORDER.map((k) => { const c = pl[k] && cardById(pl[k].id); return c ? `${c.name}${pl[k].flip ? '（反転）' : ''}` : '（なし）'; }).join(' / ');
-const igosilOf = (pl) => igosil[placementKey(pl)] || null;
+const igosilEntry = (pl) => { const pk = positionKey(pl); return (pk && igosilIndex.get(pk)) || null; };
+const igosilOf = (pl) => igosilEntry(pl)?.rec || null;
 const silText = (pl) => { const r = igosilOf(pl); return r ? (r.wrWhite * 100).toFixed(1) + '%' : ''; };
 async function loadIgosil() {
   try { igosil = (await api('GET', '/api/igosil')).records || {}; } catch { igosil = {}; }
 }
+/** 記録の読み込み・変更のあとに、表示を合わせる */
+function igosilChanged() {
+  indexIgosil(); updateSil(); renderSilRecords(); scheduleResults(); window.defense?.refresh?.();
+}
 async function saveIgosil(pl, wrWhite) {
-  igosil = (await api('POST', '/api/igosil', { key: placementKey(pl), wrWhite, label: placementLabel(pl) })).records || {};
-  if (wrWhite != null && lastEval?.r && placementKey(pl) === placementKey(placement)) silKataGo.set(placementKey(pl), lastEval.r.winrateWhite);
-  updateSil(); renderSilRecords(); scheduleResults(); window.defense?.refresh?.();
+  const pk = positionKey(pl);
+  if (!pk) throw new Error('配置が衝突しているか、石がありません');
+  // 同じ局面の記録が別のキー（以前の形式や、反転・回転した配置）で残っていれば消す
+  const old = igosilIndex.get(pk);
+  if (old && old.key !== pk) igosil = (await api('POST', '/api/igosil', { key: old.key, wrWhite: null })).records || {};
+  if (wrWhite != null) {
+    igosil = (await api('POST', '/api/igosil', { key: pk, wrWhite, placement: placementKey(pl), label: placementLabel(pl) })).records || {};
+    if (lastEval?.r && placementKey(pl) === placementKey(placement)) silKataGo.set(pk, lastEval.r.winrateWhite);
+  } else if (!old || old.key === pk) {
+    igosil = (await api('POST', '/api/igosil', { key: pk, wrWhite: null })).records || {};
+  }
+  igosilChanged();
 }
 /** 中央の「囲碁シル AI での勝率」欄を、今の配置と KataGo の結果に合わせる */
 function updateSil() {
@@ -629,21 +681,24 @@ function updateSil() {
   $('#sil-wr').textContent = rec ? (mine(rec.wrWhite) * 100).toFixed(1) + '%' : '—';
   const kg = lastEval?.r;
   $('#sil-diff').textContent = rec && kg ? `KataGo との差 ${((mine(rec.wrWhite) - mine(kg.winrateWhite)) * 100 >= 0 ? '+' : '')}${((mine(rec.wrWhite) - mine(kg.winrateWhite)) * 100).toFixed(1)} pt` : '';
-  $('#sil-note').textContent = rec ? `${rec.at} に記録` : (any ? 'この配置の記録はありません' : 'カードを置くと記録できます');
+  const ent = igosilEntry(placement);
+  const same = ent && placementKey(ent.pl) === placementKey(placement);
+  $('#sil-note').textContent = rec ? `${rec.at} に記録${same ? '' : `（反転・回転で同じ局面になる配置: ${placementLabel(ent.pl)}）`}` : (any ? 'この配置の記録はありません' : 'カードを置くと記録できます');
 }
 function renderSilRecords() {
   const list = Object.entries(igosil).sort((a, b) => (b[1].at || '').localeCompare(a[1].at || ''));
+  const plKey = new Map(list.map(([key, r]) => { const pl = recordPlacement(key, r); return [key, pl ? placementKey(pl) : null]; }));
   $('#sil-count').textContent = list.length ? `（${list.length} 件）` : '';
   const tb = $('#sil-records tbody');
   if (!list.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">まだ記録はありません</td></tr>'; return; }
   tb.innerHTML = list.map(([key, r]) => {
-    const pl = placementFromKey(key);
-    const known = CORNER_ORDER.every((k) => !pl[k] || cardById(pl[k].id));
-    const cached = silKataGo.get(key);
+    const pl = recordPlacement(key, r) || {};
+    const known = !!plKey.get(key) && CORNER_ORDER.every((k) => !pl[k] || cardById(pl[k].id));
+    const cached = known ? silKataGo.get(positionKey(pl)) : null;
     return `<tr><td>${known ? CORNER_ORDER.map((k) => placementText(pl[k])).join(' / ') : esc(r.label || key)}</td><td><b>${(r.wrWhite * 100).toFixed(1)}%</b></td>
       <td class="muted">${cached != null ? `${((r.wrWhite - cached) * 100 >= 0 ? '+' : '')}${((r.wrWhite - cached) * 100).toFixed(1)} pt` : ''}</td>
       <td class="muted nw">${esc(r.at)}</td>
-      <td class="nw"><button data-sil-apply="${esc(key)}"${known ? '' : ' disabled'}>反映</button> <button data-sil-del="${esc(key)}">削除</button></td></tr>`;
+      <td class="nw"><button data-sil-apply="${esc(plKey.get(key) || '')}"${known ? '' : ' disabled'}>反映</button> <button data-sil-del="${esc(key)}">削除</button></td></tr>`;
   }).join('');
 }
 const silKataGo = new Map();  // 配置のキー → KataGo の白の勝率（このページで解析した分だけ。一覧の差の表示に使う）
@@ -657,6 +712,7 @@ function rebuildMeta() {
   }
 }
 async function loadCards() {
+  positionKeyCache.clear();  // カードの手順が変わると局面のキーも変わる
   const [data] = await Promise.all([api('GET', '/api/cards'), loadRanks(), loadIgosil()]);
   cards = (data.cards || []).map((c) => ({ ...c, moves: c.moves || [] }));
   rebuildMeta();
@@ -940,7 +996,7 @@ function setEval(r, note) {
   // バーは白の割合（左が黒・右が白の盤面イメージに合わせる）
   $('#wr-bar').style.width = (r.winrateWhite * 100).toFixed(1) + '%';
   $('#eval-note').textContent = note || `${r.visits ?? '?'} visits${r.cached ? '（キャッシュ）' : ''}`;
-  if (igosilOf(placement)) { silKataGo.set(placementKey(placement), r.winrateWhite); renderSilRecords(); }
+  if (igosilOf(placement)) { silKataGo.set(positionKey(placement), r.winrateWhite); renderSilRecords(); }
   updateSil();
 }
 async function evaluateCurrent() {
@@ -1589,7 +1645,7 @@ $('#sil-records').addEventListener('click', (ev) => {
     store.set('placement', placement);
     syncCornerInputs(); onPlacementChange();
   } else if (d && confirm('この記録を削除しますか？')) {
-    api('POST', '/api/igosil', { key: d, wrWhite: null }).then((x) => { igosil = x.records || {}; updateSil(); renderSilRecords(); scheduleResults(); window.defense?.refresh?.(); })
+    api('POST', '/api/igosil', { key: d, wrWhite: null }).then((x) => { igosil = x.records || {}; igosilChanged(); })
       .catch((e) => alert('削除できませんでした: ' + e.message));
   }
 });
@@ -1669,7 +1725,7 @@ for (const id of SETTINGS) {
 
 initResultFilters();
 refreshStatus();
-loadCards().then(() => { renderSilRecords(); updateSil(); if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
+loadCards().then(() => { igosilChanged(); if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });
 </script>
 <script src="defense.js"></script>

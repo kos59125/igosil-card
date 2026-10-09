@@ -408,14 +408,16 @@ def load_igosil():
         for k, v in (data.get("records") or {}).items():
             w = float(v.get("wrWhite"))
             if 0 <= w <= 1:
-                out[str(k)] = {"wrWhite": w, "at": str(v.get("at") or ""), "label": str(v.get("label") or "")}
+                out[str(k)] = {"wrWhite": w, "at": str(v.get("at") or ""), "label": str(v.get("label") or ""),
+                               "placement": str(v.get("placement") or "")}
         return out
     except (OSError, ValueError, TypeError, AttributeError):
         return {}
 
 
-def save_igosil_record(key, wr_white, label=""):
-    """1 件の記録を追加・更新する。wr_white が None なら削除"""
+def save_igosil_record(key, wr_white, label="", placement=""):
+    """1 件の記録を追加・更新する。key は局面のキー（反転・回転で同じになる配置は同じキー）、
+    placement は記録したときの配置（4 隅のカードと向き）。wr_white が None なら削除"""
     key = str(key or "").strip()
     if not key or len(key) > 400:
         raise ValueError("配置のキーが正しくありません")
@@ -427,7 +429,8 @@ def save_igosil_record(key, wr_white, label=""):
             w = float(wr_white)
             if not 0 <= w <= 1:
                 raise ValueError("勝率は 0〜100% で指定してください")
-            records[key] = {"wrWhite": round(w, 5), "at": time.strftime("%Y-%m-%d %H:%M"), "label": str(label or "")[:300]}
+            records[key] = {"wrWhite": round(w, 5), "at": time.strftime("%Y-%m-%d %H:%M"), "label": str(label or "")[:300],
+                            "placement": str(placement or "")[:400]}
         os.makedirs(DATA_DIR, exist_ok=True)
         tmp = IGOSIL_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -931,7 +934,7 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == "/api/igosil":
                 body = self._body()
                 try:
-                    records = save_igosil_record(body.get("key"), body.get("wrWhite"), body.get("label"))
+                    records = save_igosil_record(body.get("key"), body.get("wrWhite"), body.get("label"), body.get("placement"))
                 except (ValueError, TypeError) as e:
                     return self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
                 return self._json({"records": records})
