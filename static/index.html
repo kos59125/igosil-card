@@ -1728,6 +1728,7 @@ refreshStatus();
 loadCards().then(() => { igosilChanged(); if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });
 </script>
+<script src="ladder.js"></script>
 <script src="defense.js"></script>
 <script src="setup.js"></script>
 </body>
