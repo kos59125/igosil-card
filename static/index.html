@@ -152,6 +152,11 @@ tr.row-new { animation: row-in 1.8s ease-out; }
 #opt-results tbody tr.rrow { height: 30px; }
 #opt-results tbody tr.rrow td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-top: 0; padding-bottom: 0; }
 #opt-results tbody tr.rrow.current td { font-weight: 600; background: var(--selected); }
+#opt-results td.sil { color: var(--accent); }
+#sil-box { margin-top: 10px; padding: 6px 8px; border-left: 3px solid var(--accent); background: var(--bg); border-radius: 0 6px 6px 0; }
+#sil-box .row { margin: 2px 0; }
+#sil-wr { font-size: 22px; font-weight: 700; color: var(--accent); }
+#sil-records td { vertical-align: top; }
 #opt-results tbody tr.rrow.current td:first-child { box-shadow: inset 4px 0 0 var(--accent); }
 #opt-results tbody tr.spacer td { border: none; padding: 0; }
 @media (max-width: 1400px) { .result-filters { grid-template-columns: auto 1fr; } }
@@ -210,6 +215,13 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <div style="flex:1;min-width:140px"><div class="bar"><div id="wr-bar" style="width:50%"></div></div><div class="muted" id="eval-note"></div></div>
     </div>
     <div class="muted" id="prisoners"></div>
+    <div id="sil-box" title="囲碁シルの AI は KataGo と異なるので、勝率が違うことがあります。ゲームで確認した勝率をこの配置（4 隅のカードと向き）に記録しておけます">
+      <div class="muted" id="sil-label">囲碁シル AI での白（自分）の勝率</div>
+      <div class="row"><span id="sil-wr">—</span><span class="muted" id="sil-diff"></span></div>
+      <div class="row"><input type="number" id="sil-input" min="0" max="100" step="0.1" style="width:6em" placeholder="例: 62.5"> %
+        <button id="sil-save">記録</button><button id="sil-del">削除</button></div>
+      <div class="muted" id="sil-note"></div>
+    </div>
     <div id="matchup"></div>
   </section>
 
@@ -252,8 +264,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       </div>
       <div class="row" style="margin:4px 0 2px"><span id="opt-caption"></span><span style="flex:1"></span><span class="muted" id="opt-count"></span></div>
       <div class="results-box" id="opt-results-box">
-        <table id="opt-results"><colgroup><col style="width:52px"><col style="width:62px"><col style="width:54px"><col><col><col style="width:42px"></colgroup>
-          <thead><tr><th>#</th><th>白勝率</th><th>リード</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
+        <table id="opt-results"><colgroup><col style="width:52px"><col style="width:62px"><col style="width:54px"><col style="width:54px"><col><col><col style="width:42px"></colgroup>
+          <thead><tr><th>#</th><th>白勝率</th><th>リード</th><th title="囲碁シル AI で記録した白の勝率（記録がある組み合わせだけ）">シル</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="muted">結果の行をクリックすると盤面に反映します。</div>
     </div>
@@ -286,6 +298,9 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <div class="muted">カードは定石一覧に描かれた相手側の配置（防御時配置）として登録します。右上・左下（相手）は表示通り、左上・右下（自分・挑戦時配置）は白黒を反転して配置します。</div>
       <div class="row"><label>同時に送る局面数 <input type="number" id="batch" value="32" min="1" max="512" style="width:5em"></label></div>
       <div class="row"><label>カード取得元 URL <input type="text" id="source-url" style="width:100%" value="https://gonote-app.com/article/TSqUCWy46aAwyoUyrix2"></label></div>
+      <h3 style="font-size:14px;margin:16px 0 4px">囲碁シル AI の勝率の記録 <span class="muted" id="sil-count"></span></h3>
+      <div class="muted">中央の「囲碁シル AI での勝率」で記録した配置の一覧です（サーバーの data/igosil.json に保存。git の管理対象外）。「反映」で盤面に配置します。</div>
+      <div class="scroll"><table id="sil-records"><thead><tr><th>配置（左上 / 右上 / 左下 / 右下）</th><th>白の勝率</th><th>KataGo との差</th><th>記録日時</th><th></th></tr></thead><tbody></tbody></table></div>
     </div>
   </section>
 </main>
@@ -573,6 +588,66 @@ function setRank(id, n) {
 }
 const activeCards = () => cards.filter((c) => !c.retired);
 
+// ---------------------------------------------------------------------------
+// 囲碁シル AI の勝率の記録。囲碁シルの AI は KataGo と異なるので、ゲームで確認した勝率を配置ごとに残しておき、
+// KataGo の解析結果と並べて表示する。サーバーの data/igosil.json に保存（git の管理対象外）。勝率は白の勝率で持つ
+// ---------------------------------------------------------------------------
+let igosil = {};
+/** 配置のキー: 4 隅のカードと向き（"TL=id:1|TR=-|..."） */
+const placementKey = (pl) => CORNER_ORDER.map((k) => `${k}=${pl[k] ? `${pl[k].id}:${pl[k].flip ? 1 : 0}` : '-'}`).join('|');
+function placementFromKey(key) {
+  const pl = {};
+  for (const part of key.split('|')) {
+    const [k, v] = part.split('=');
+    if (!CORNERS[k]) continue;
+    if (!v || v === '-') { pl[k] = null; continue; }
+    const [id, f] = v.split(':');
+    pl[k] = { id, flip: f === '1' };
+  }
+  return pl;
+}
+const placementLabel = (pl) => CORNER_ORDER.map((k) => { const c = pl[k] && cardById(pl[k].id); return c ? `${c.name}${pl[k].flip ? '（反転）' : ''}` : '（なし）'; }).join(' / ');
+const igosilOf = (pl) => igosil[placementKey(pl)] || null;
+const silText = (pl) => { const r = igosilOf(pl); return r ? (r.wrWhite * 100).toFixed(1) + '%' : ''; };
+async function loadIgosil() {
+  try { igosil = (await api('GET', '/api/igosil')).records || {}; } catch { igosil = {}; }
+}
+async function saveIgosil(pl, wrWhite) {
+  igosil = (await api('POST', '/api/igosil', { key: placementKey(pl), wrWhite, label: placementLabel(pl) })).records || {};
+  if (wrWhite != null && lastEval?.r && placementKey(pl) === placementKey(placement)) silKataGo.set(placementKey(pl), lastEval.r.winrateWhite);
+  updateSil(); renderSilRecords(); scheduleResults(); window.defense?.refresh?.();
+}
+/** 中央の「囲碁シル AI での勝率」欄を、今の配置と KataGo の結果に合わせる */
+function updateSil() {
+  const me = myColor() === 'W' ? '白' : '黒';
+  const mine = (w) => (myColor() === 'W' ? w : 1 - w);
+  $('#sil-label').textContent = `囲碁シル AI での${me}（自分）の勝率`;
+  const rec = igosilOf(placement);
+  const any = CORNER_ORDER.some((k) => placement[k]);
+  $('#sil-save').disabled = !any; $('#sil-input').disabled = !any;
+  $('#sil-del').disabled = !rec;
+  $('#sil-wr').textContent = rec ? (mine(rec.wrWhite) * 100).toFixed(1) + '%' : '—';
+  const kg = lastEval?.r;
+  $('#sil-diff').textContent = rec && kg ? `KataGo との差 ${((mine(rec.wrWhite) - mine(kg.winrateWhite)) * 100 >= 0 ? '+' : '')}${((mine(rec.wrWhite) - mine(kg.winrateWhite)) * 100).toFixed(1)} pt` : '';
+  $('#sil-note').textContent = rec ? `${rec.at} に記録` : (any ? 'この配置の記録はありません' : 'カードを置くと記録できます');
+}
+function renderSilRecords() {
+  const list = Object.entries(igosil).sort((a, b) => (b[1].at || '').localeCompare(a[1].at || ''));
+  $('#sil-count').textContent = list.length ? `（${list.length} 件）` : '';
+  const tb = $('#sil-records tbody');
+  if (!list.length) { tb.innerHTML = '<tr><td colspan="5" class="muted">まだ記録はありません</td></tr>'; return; }
+  tb.innerHTML = list.map(([key, r]) => {
+    const pl = placementFromKey(key);
+    const known = CORNER_ORDER.every((k) => !pl[k] || cardById(pl[k].id));
+    const cached = silKataGo.get(key);
+    return `<tr><td>${known ? CORNER_ORDER.map((k) => placementText(pl[k])).join(' / ') : esc(r.label || key)}</td><td><b>${(r.wrWhite * 100).toFixed(1)}%</b></td>
+      <td class="muted">${cached != null ? `${((r.wrWhite - cached) * 100 >= 0 ? '+' : '')}${((r.wrWhite - cached) * 100).toFixed(1)} pt` : ''}</td>
+      <td class="muted nw">${esc(r.at)}</td>
+      <td class="nw"><button data-sil-apply="${esc(key)}"${known ? '' : ' disabled'}>反映</button> <button data-sil-del="${esc(key)}">削除</button></td></tr>`;
+  }).join('');
+}
+const silKataGo = new Map();  // 配置のキー → KataGo の白の勝率（このページで解析した分だけ。一覧の差の表示に使う）
+
 function rebuildMeta() {
   cardMeta = {};
   placedMemo.clear();
@@ -582,7 +657,7 @@ function rebuildMeta() {
   }
 }
 async function loadCards() {
-  const [data] = await Promise.all([api('GET', '/api/cards'), loadRanks()]);
+  const [data] = await Promise.all([api('GET', '/api/cards'), loadRanks(), loadIgosil()]);
   cards = (data.cards || []).map((c) => ({ ...c, moves: c.moves || [] }));
   rebuildMeta();
   const st = $('#cards-status');
@@ -832,6 +907,7 @@ function renderAll() {
   updateBadges();
   renderMatchup();
   if (lastResults.length) scheduleResults();  // 結果の表の「盤面に反映中」の印を合わせる
+  updateSil();
   const pr = pos.prisoners;
   $('#prisoners').textContent = `アゲハマ: 黒 ${pr.B} / 白 ${pr.W}　→ 実質コミ ${pos.komi}（${KOMI} ${pr.W - pr.B >= 0 ? '+' : '−'} ${Math.abs(pr.W - pr.B)}）`;
   return pos;
@@ -856,7 +932,7 @@ function setEval(r, note) {
   const me = myColor() === 'W' ? '白' : '黒';
   $('#wr-label').textContent = `${me}（自分）の勝率`;
   $('#lead-label').textContent = `${me}の目数リード`;
-  if (!r) { $('#wr').textContent = '—'; $('#lead').textContent = '—'; $('#wr-bar').style.width = '50%'; $('#eval-note').textContent = note || ''; return; }
+  if (!r) { $('#wr').textContent = '—'; $('#lead').textContent = '—'; $('#wr-bar').style.width = '50%'; $('#eval-note').textContent = note || ''; updateSil(); return; }
   const wr = myColor() === 'W' ? r.winrateWhite : 1 - r.winrateWhite;
   const lead = myColor() === 'W' ? r.scoreLeadWhite : -r.scoreLeadWhite;
   $('#wr').textContent = (wr * 100).toFixed(1) + '%';
@@ -864,6 +940,8 @@ function setEval(r, note) {
   // バーは白の割合（左が黒・右が白の盤面イメージに合わせる）
   $('#wr-bar').style.width = (r.winrateWhite * 100).toFixed(1) + '%';
   $('#eval-note').textContent = note || `${r.visits ?? '?'} visits${r.cached ? '（キャッシュ）' : ''}`;
+  if (igosilOf(placement)) { silKataGo.set(placementKey(placement), r.winrateWhite); renderSilRecords(); }
+  updateSil();
 }
 async function evaluateCurrent() {
   const pos = renderAll();
@@ -1254,7 +1332,7 @@ function drawResults() {
   $('#opt-count').textContent = lastResults.length ? (filtering ? `${resultsView.length.toLocaleString()} / ${lastResults.length.toLocaleString()} 件` : `${lastResults.length.toLocaleString()} 件`) : '';
   const box = $('#opt-results-box'), tb = $('#opt-results tbody');
   if (!resultsView.length) {
-    tb.innerHTML = `<tr><td colspan="6" class="muted">${lastResults.length ? '条件に合う組み合わせがありません' : esc(resultsEmptyText)}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="7" class="muted">${lastResults.length ? '条件に合う組み合わせがありません' : esc(resultsEmptyText)}</td></tr>`;
     return;
   }
   const head = $('#opt-results thead').offsetHeight;
@@ -1276,11 +1354,11 @@ function drawResults() {
     const tip = `${cardItem(r.pl.TL?.id)?.name || '（なし）'}${r.pl.TL?.flip ? '（反転）' : ''} / ${cardItem(r.pl.BR?.id)?.name || '（なし）'}${r.pl.BR?.flip ? '（反転）' : ''}`;
     const isCur = sameCorner(r.pl.TL) + '|' + sameCorner(r.pl.BR) === cur;
     rows.push(`<tr class="rrow clickable${isCur ? ' current' : ''}" data-d="${drawnResults.length - 1}"${style} title="${esc(tip)}"><td>${k + 1}</td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
-      <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td><td>${placementCell(r.pl.TL)}</td><td>${placementCell(r.pl.BR)}</td>
+      <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td><td class="sil">${silText(r.pl)}</td><td>${placementCell(r.pl.TL)}</td><td>${placementCell(r.pl.BR)}</td>
       <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td></tr>`);
   }
-  tb.innerHTML = `<tr class="spacer" style="height:${start * RESULT_ROW_H}px"><td colspan="6"></td></tr>${rows.join('')}` +
-    `<tr class="spacer" style="height:${(resultsView.length - end) * RESULT_ROW_H}px"><td colspan="6"></td></tr>`;
+  tb.innerHTML = `<tr class="spacer" style="height:${start * RESULT_ROW_H}px"><td colspan="7"></td></tr>${rows.join('')}` +
+    `<tr class="spacer" style="height:${(resultsView.length - end) * RESULT_ROW_H}px"><td colspan="7"></td></tr>`;
   // 強調表示が残っている行があれば、薄くなっていくように描き直す
   clearTimeout(resultsFadeTimer);
   if (fresh) resultsFadeTimer = setTimeout(scheduleResults, 120);
@@ -1493,6 +1571,28 @@ function setRole(r) {
 }
 $$('.tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 $('#btn-eval').onclick = evaluateCurrent;
+$('#sil-save').onclick = () => {
+  const v = parseFloat($('#sil-input').value);
+  if (!Number.isFinite(v) || v < 0 || v > 100) { alert('勝率を 0〜100 の数値（%）で入力してください'); return; }
+  const mine = v / 100;
+  saveIgosil({ ...placement }, myColor() === 'W' ? mine : 1 - mine).then(() => { $('#sil-input').value = ''; }).catch((e) => alert('記録できませんでした: ' + e.message));
+};
+$('#sil-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('#sil-save').click(); });
+$('#sil-del').onclick = () => {
+  if (!igosilOf(placement) || !confirm('この配置の囲碁シル AI の勝率の記録を削除しますか？')) return;
+  saveIgosil({ ...placement }, null).catch((e) => alert('削除できませんでした: ' + e.message));
+};
+$('#sil-records').addEventListener('click', (ev) => {
+  const a = ev.target.dataset.silApply, d = ev.target.dataset.silDel;
+  if (a) {
+    Object.assign(placement, placementFromKey(a));
+    store.set('placement', placement);
+    syncCornerInputs(); onPlacementChange();
+  } else if (d && confirm('この記録を削除しますか？')) {
+    api('POST', '/api/igosil', { key: d, wrWhite: null }).then((x) => { igosil = x.records || {}; updateSil(); renderSilRecords(); scheduleResults(); window.defense?.refresh?.(); })
+      .catch((e) => alert('削除できませんでした: ' + e.message));
+  }
+});
 function clearPlacement(keys) {
   for (const k of keys) placement[k] = null;
   onPlacementChange();
@@ -1569,7 +1669,7 @@ for (const id of SETTINGS) {
 
 initResultFilters();
 refreshStatus();
-loadCards().then(() => { if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
+loadCards().then(() => { renderSilRecords(); updateSil(); if ($('#auto-eval').checked && (placement.TL || placement.TR || placement.BL || placement.BR)) evaluateCurrent(); })
   .catch((e) => { $('#cards-status').textContent = 'カードの読み込みに失敗: ' + e.message; });
 </script>
 <script src="defense.js"></script>

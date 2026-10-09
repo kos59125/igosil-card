@@ -39,6 +39,7 @@ DATA_DIR = os.path.join(ROOT, "data")
 CARDS_PATH = os.path.join(DATA_DIR, "cards.json")
 # 所持カードのランク（個人の情報なので定石データとは別に保存し、git の管理対象から外す）
 RANKS_PATH = os.path.join(DATA_DIR, "ranks.json")
+IGOSIL_PATH = os.path.join(DATA_DIR, "igosil.json")  # 囲碁シル AI の勝率の記録（個人のデータなので git の管理対象外）
 CARD_SOURCE_URL = "https://gonote-app.com/article/TSqUCWy46aAwyoUyrix2"
 
 GTP_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ"  # I を飛ばす
@@ -393,6 +394,46 @@ def load_ranks():
         return {k: int(v) for k, v in (data.get("ranks") or {}).items() if 1 <= int(v) <= 5}
     except (OSError, ValueError, TypeError):
         return {}
+
+
+IGOSIL_LOCK = threading.Lock()
+
+
+def load_igosil():
+    """囲碁シル AI の勝率の記録: 配置のキー → { wrWhite: 白の勝率 (0〜1), at: 記録日時, label: 配置の説明 }"""
+    try:
+        with open(IGOSIL_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        out = {}
+        for k, v in (data.get("records") or {}).items():
+            w = float(v.get("wrWhite"))
+            if 0 <= w <= 1:
+                out[str(k)] = {"wrWhite": w, "at": str(v.get("at") or ""), "label": str(v.get("label") or "")}
+        return out
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def save_igosil_record(key, wr_white, label=""):
+    """1 件の記録を追加・更新する。wr_white が None なら削除"""
+    key = str(key or "").strip()
+    if not key or len(key) > 400:
+        raise ValueError("配置のキーが正しくありません")
+    with IGOSIL_LOCK:
+        records = load_igosil()
+        if wr_white is None:
+            records.pop(key, None)
+        else:
+            w = float(wr_white)
+            if not 0 <= w <= 1:
+                raise ValueError("勝率は 0〜100% で指定してください")
+            records[key] = {"wrWhite": round(w, 5), "at": time.strftime("%Y-%m-%d %H:%M"), "label": str(label or "")[:300]}
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = IGOSIL_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"records": records}, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, IGOSIL_PATH)
+        return records
 
 
 def save_ranks(ranks):
@@ -869,6 +910,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": str(e)}, HTTPStatus.BAD_GATEWAY)
         if self.path == "/api/ranks":
             return self._json({"ranks": load_ranks()})
+        if self.path == "/api/igosil":
+            return self._json({"records": load_igosil()})
         if self.path == "/api/cards":
             with self.cards_lock:
                 return self._json(load_cards())
@@ -885,6 +928,13 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if self.path == "/api/analyze":
                 return self._analyze()
+            if self.path == "/api/igosil":
+                body = self._body()
+                try:
+                    records = save_igosil_record(body.get("key"), body.get("wrWhite"), body.get("label"))
+                except (ValueError, TypeError) as e:
+                    return self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+                return self._json({"records": records})
             if self.path == "/api/ranks":
                 body = self._body()
                 return self._json({"ranks": save_ranks(body.get("ranks") or {})})

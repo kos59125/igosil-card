@@ -375,15 +375,24 @@
   /** 値の表示。相手の応手を全部評価していない組は「≤」（これ以上ではない＝上限）を付ける */
   const vText = (cell) => (cell.v == null ? '—' : `${cell.complete ? '' : '≤ '}${pct(cell.v)}`);
   const coverText = (cell) => (cell.total ? `${cell.n.toLocaleString()} / ${cell.total.toLocaleString()}` : '—');
-  function resetPairs() { $('#def-pairs tbody').innerHTML = ''; $('#def-pairs-summary').textContent = '参考: 各組の評価（相手の最善応手に対する黒の勝率）'; }
+  function resetPairs() { lastPairCells = null; $('#def-pairs tbody').innerHTML = ''; $('#def-pairs-summary').textContent = '参考: 各組の評価（相手の最善応手に対する黒の勝率）'; }
+  /** 組と相手の応手の配置に、囲碁シル AI の記録があれば黒の勝率で返す（index.html の igosilOf） */
+  const silOf = (cell) => {
+    if (!cell?.resp || typeof igosilOf !== 'function') return null;
+    const rec = igosilOf({ TR: cell.a, BL: cell.b, TL: cell.resp.TL || null, BR: cell.resp.BR || null });
+    return rec ? 1 - rec.wrWhite : null;
+  };
+  const silHtml = (cell) => { const v = silOf(cell); return v == null ? '' : `<div class="muted" style="color:var(--accent)" title="囲碁シル AI で記録した黒の勝率（相手の最善応手の配置）">シル ${pct(v)}</div>`; };
+  let lastPairCells = null;
   function renderPairs(cells) {
+    lastPairCells = cells;
     const list = [...cells.values()].filter((c) => c.v != null).sort((x, y) => y.v - x.v).slice(0, PAIR_LIMIT);
     const tb = $('#def-pairs tbody');
     tb.innerHTML = '';
     list.forEach((cell, i) => {
       const tr = document.createElement('tr');
       tr.className = 'clickable';
-      tr.innerHTML = `<td>${i + 1}</td><td><b>${vText(cell)}</b></td><td>${cardHtml(cell.a)}</td><td>${cardHtml(cell.b)}</td>
+      tr.innerHTML = `<td>${i + 1}</td><td><b>${vText(cell)}</b>${silHtml(cell)}</td><td>${cardHtml(cell.a)}</td><td>${cardHtml(cell.b)}</td>
         <td>${cell.resp ? `${cardHtml(cell.resp.TL)}<br>${cardHtml(cell.resp.BR)}` : '<span class="muted">応手なし</span>'}</td>
         <td class="muted">${coverText(cell)}</td>`;
       tr._cell = cell;
@@ -556,7 +565,7 @@
       const same = cell && (cell.a.flip !== rowsA[ri].flip || cell.b.flip !== colsB[ci].flip);
       const title = cell?.resp ? `相手の最善応手: 左上 ${cardTxt(cell.resp.TL)} / 右下 ${cardTxt(cell.resp.BR)}` +
         (same ? `\n（同義の向き 右上 ${cardTxt(cell.a)} / 左下 ${cardTxt(cell.b)} で評価）` : '') : '';
-      return `<td class="cell" data-r="${ri}" data-c="${ci}" title="${esc(title)}">${cell ? vText(cell) : '—'}<div class="muted" style="font-weight:normal">${cell && !cell.complete ? coverText(cell) : ''}</div></td>`;
+      return `<td class="cell" data-r="${ri}" data-c="${ci}" title="${esc(title)}">${cell ? vText(cell) : '—'}<div class="muted" style="font-weight:normal">${cell && !cell.complete ? coverText(cell) : ''}</div>${silHtml(cell)}</td>`;
     }).join('')}</tr>`).join('');
     $('#def-detail').innerHTML = `
       <div class="muted">${st.shownSet + 1} 位の内訳: 行 = 右上 (A)、列 = 左下 (B)。${st.result.quick
@@ -944,7 +953,9 @@
   saveFixed();
   applyMode();
   $('#def-fixed-clear').onclick = () => { fixed.A = [null, null, null]; fixed.B = [null, null, null]; renderFixed(); saveFixed(); };
-  window.defense = { bestSets, buildMatrix, topCards, clear: clearDefense };  // テスト・デバッグ用
+  // refresh: 囲碁シル AI の記録が変わったときに表を描き直す
+  window.defense = { bestSets, buildMatrix, topCards, clear: clearDefense,
+    refresh: () => { if (st.result) renderBest(); if (lastPairCells) renderPairs(lastPairCells); } };  // テスト・デバッグ用
   $('#def-run').onclick = () => runDefense();
   $('#def-cancel').onclick = () => { st.cancel = true; abortAnalyze(); };
 })();

@@ -6,3 +6,5 @@ __pycache__/
 katago/
 data/ranks.json
 data/ranks.json.tmp
+data/igosil.json
+data/igosil.json.tmp
