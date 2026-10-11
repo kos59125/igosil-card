@@ -90,12 +90,12 @@
     <div id="def-best">
       <h3 id="def-sets-title">採用する 6 枚（右上 A 3 枚 + 左下 B 3 枚）の候補</h3>
       <div class="muted" id="def-sets-note"></div>
-      <div class="scroll"><table id="def-sets"><thead><tr><th>#</th><th>期待勝率（黒）</th><th id="def-sets-hA">右上 (A) 3 枚</th><th id="def-sets-hB">左下 (B) 3 枚</th><th id="def-sets-hW">最悪の組<br><span class="muted">応手の評価率</span></th></tr></thead><tbody></tbody></table></div>
+      <div class="scroll"><table id="def-sets"><thead><tr><th>#</th><th>期待勝率（黒）</th><th id="def-sets-hA">右上 (A) 3 枚</th><th id="def-sets-hB">左下 (B) 3 枚</th><th>最良の組</th><th id="def-sets-hW">最悪の組<br><span class="muted">応手の評価率</span></th></tr></thead><tbody></tbody></table></div>
       <div id="def-detail"></div>
     </div>
     <div id="def-single"></div>
     <details id="def-pairs-wrap" style="margin-top:8px"><summary class="muted" id="def-pairs-summary">参考: 各組の評価（相手の最善応手に対する黒の勝率）</summary>
-      <div class="scroll"><table id="def-pairs"><thead><tr><th>#</th><th>黒勝率</th><th>右上 (A)</th><th>左下 (B)</th><th>相手の最善応手（これまで）</th><th>評価済みの応手</th></tr></thead><tbody></tbody></table></div>
+      <div class="scroll"><table id="def-pairs"><thead></thead><tbody></tbody></table></div>
       <div class="muted">行をクリックすると、その組と相手の最善応手を盤面に反映します。</div>
     </details>`;
   const style = document.createElement('style');
@@ -106,6 +106,9 @@
     #def-single h3 { margin: 0 0 6px; font-size: 14px; }
     #def-single h4 { margin: 10px 0 4px; font-size: 13px; }
     #def-single tr.active { background: var(--selected); }
+    #tab-def th.dsort { cursor: pointer; user-select: none; white-space: nowrap; }
+    #tab-def th.dsort:hover { color: var(--accent-2); }
+    #tab-def .sil { color: var(--accent); }
     #def-single td { vertical-align: top; }
     .lad-good { color: var(--ok); } .lad-bad { color: var(--bad); }
     .def-fixed-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: start; margin: 4px 0; }
@@ -395,21 +398,50 @@
   function resetPairs() { lastPairCells = null; $('#def-pairs tbody').innerHTML = ''; $('#def-pairs-summary').textContent = '参考: 各組の評価（相手の最善応手に対する黒の勝率）'; }
   /** 組と相手の応手の配置に、囲碁シル AI の記録があれば黒の勝率で返す（index.html の igosilOf） */
   const silOf = (cell) => {
-    if (!cell?.resp || typeof igosilOf !== 'function') return null;
-    const rec = igosilOf({ TR: cell.a, BL: cell.b, TL: cell.resp.TL || null, BR: cell.resp.BR || null });
+    if (!cell || typeof igosilOf !== 'function') return null;
+    // 相手の応手がない（自分の 2 隅だけで評価した）組は、左上・右下が空きの配置で引く
+    const rec = igosilOf({ TR: cell.a, BL: cell.b, TL: cell.resp?.TL || null, BR: cell.resp?.BR || null });
     return rec || null;
   };
   const silHtml = (cell) => { const rec = silOf(cell); return rec ? `<div class="muted${silWin(rec, 'B') ? ' sil-win' : ''}" style="${silWin(rec, 'B') ? '' : 'color:var(--accent)'}" title="囲碁シル AI で記録した黒の勝率（相手の最善応手の配置）">シル ${silFmt(rec, 'B')}</div>` : ''; };
+  // ---- 表の並べ替え（見出しのクリック。もう一度で昇順・降順を切り替え） --------------------------
+  const dsort = { pairs: { key: 'v', desc: true }, rankA: { key: 'mean', desc: true }, rankB: { key: 'mean', desc: true }, detail: { key: 'v', desc: true } };
+  const silB = (cell) => (typeof silValue === 'function' ? silValue(silOf(cell), 'B') : null);  // 囲碁シルの黒の勝率（整数 %。記録がなければ null）
+  /** getters[key] の値で並べる（値のないものは後ろ）。同じ値は getters.base の順 */
+  function sortRows(list, table, getters) {
+    const { key, desc } = dsort[table], g = getters[key], base = getters.base, dir = desc ? 1 : -1;
+    return list.slice().sort((a, b) => {
+      const x = g(a), y = g(b);
+      if (x != null || y != null) {
+        if (x == null) return 1;
+        if (y == null) return -1;
+        if (x !== y) return dir * (y - x);
+      }
+      return base(b) - base(a);
+    });
+  }
+  const sortTh = (table, key, label, title = '') =>
+    `<th class="dsort" data-dsort="${table}:${key}" title="${esc(title)}クリックで並べ替え（もう一度で昇順・降順を切り替え）">${label}${dsort[table].key === key ? (dsort[table].desc ? '▼' : '▲') : ''}</th>`;
+  const silCellHtml = (cell) => { const rec = silOf(cell); return rec ? `<span class="${silWin(rec, 'B') ? 'sil-win' : 'sil'}">${silFmt(rec, 'B')}</span>` : ''; };
+  $('#tab-def').addEventListener('click', (ev) => {
+    const th = ev.target.closest('th[data-dsort]'); if (!th) return;
+    const [table, key] = th.dataset.dsort.split(':');
+    const cur = dsort[table];
+    if (cur.key === key) cur.desc = !cur.desc; else { cur.key = key; cur.desc = true; }
+    if (table === 'pairs') { if (lastPairCells) renderPairs(lastPairCells); } else drawRanking();
+  });
+
   let lastPairCells = null;
   function renderPairs(cells) {
     lastPairCells = cells;
-    const list = [...cells.values()].filter((c) => c.v != null).sort((x, y) => y.v - x.v).slice(0, PAIR_LIMIT);
+    $('#def-pairs thead').innerHTML = `<tr><th>#</th>${sortTh('pairs', 'v', '黒勝率')}${sortTh('pairs', 'sil', 'シル', '囲碁シル AI で記録した黒の勝率（記録がある組だけ）。')}<th>右上 (A)</th><th>左下 (B)</th><th>相手の最善応手（これまで）</th><th>評価済みの応手</th></tr>`;
+    const list = sortRows([...cells.values()].filter((c) => c.v != null), 'pairs', { v: (c) => c.v, sil: silB, base: (c) => c.v }).slice(0, PAIR_LIMIT);
     const tb = $('#def-pairs tbody');
     tb.innerHTML = '';
     list.forEach((cell, i) => {
       const tr = document.createElement('tr');
       tr.className = 'clickable';
-      tr.innerHTML = `<td>${i + 1}</td><td><b>${vText(cell)}</b>${silHtml(cell)}</td><td>${cardHtml(cell.a)}</td><td>${cardHtml(cell.b)}</td>
+      tr.innerHTML = `<td>${i + 1}</td><td><b>${vText(cell)}</b></td><td>${silCellHtml(cell)}</td><td>${cardHtml(cell.a)}</td><td>${cardHtml(cell.b)}</td>
         <td>${cell.resp ? `${cardHtml(cell.resp.TL)}<br>${cardHtml(cell.resp.BR)}` : '<span class="muted">応手なし</span>'}</td>
         <td class="muted">${coverText(cell)}</td>`;
       tr._cell = cell;
@@ -549,9 +581,10 @@
     sets.forEach((set, i) => {
       const key = setKey(set, rowsA, colsB);
       keys.add(key);
-      let worst = Infinity, complete = true, cover = Infinity;
+      let worst = Infinity, best = -Infinity, complete = true, cover = Infinity;
       for (const ri of set.rows) for (const ci of set.cols) {
         worst = Math.min(worst, M[ri][ci]);
+        best = Math.max(best, M[ri][ci]);
         const cell = r.lookup(rowsA[ri], colsB[ci]);
         if (!cell?.complete) complete = false;
         cover = Math.min(cover, cell?.complete ? 1 : (cell?.total ? cell.n / cell.total : 0));
@@ -562,6 +595,7 @@
       tr.innerHTML = `<td>${i + 1}</td><td><b>${le}${pct(set.ev)}</b></td>
         <td class="cards">${set.rows.map((ri) => `<div>${cardHtml(rowsA[ri])}</div>`).join('')}</td>
         <td class="cards">${set.cols.map((ci) => `<div>${cardHtml(colsB[ci])}</div>`).join('')}</td>
+        <td style="white-space:nowrap">${le}${pct(best)}</td>
         <td style="white-space:nowrap">${le}${pct(worst)}${quick ? '' : `<div class="muted">${complete ? '100%' : `最低 ${(100 * cover).toFixed(cover < 0.01 ? 2 : 1)}%`}</div>`}</td>`;
       if (!shownKeys.has(key)) { tr.classList.add('row-new'); tr.addEventListener('animationend', () => tr.classList.remove('row-new'), { once: true }); }
       tr.onclick = () => { st.shownSet = i; renderBest(); };
@@ -1053,7 +1087,11 @@
     });
     return [...byCard.values()].map((r) => {
       const worst = r.partners.reduce((a, p) => (p.v < a.v ? p : a), r.partners[0]);
-      return { ...r, worst, n: r.partners.length, complete: r.partners.length === r.total && r.partners.every((p) => p.cell?.complete) };
+      const best = r.partners.reduce((a, p) => (p.v > a.v ? p : a), r.partners[0]);
+      // 囲碁シルの記録がある組だけの平均（黒の勝率、整数 %）
+      const sils = r.partners.map((p) => silB(p.cell)).filter((v) => v != null);
+      const sil = sils.length ? sils.reduce((a, v) => a + v, 0) / sils.length : null;
+      return { ...r, worst, best, sil, silN: sils.length, n: r.partners.length, complete: r.partners.length === r.total && r.partners.every((p) => p.cell?.complete) };
     }).sort((a, b) => b.mean - a.mean);
   }
   let lastRank = null;
@@ -1072,12 +1110,19 @@
     const quick = R.cand.quick;
     const val = (v, complete) => `${complete || quick ? '' : '≤ '}${pct(v)}`;
     const cardCell = (id) => { const c = cardById(id); return `${cardHtml({ id, flip: false }).replace(/ <b>\(反転\)<\/b>/, '')}${isOwned(c) ? (rankOf(id) ? ` <span class="muted">${rankText(id)}</span>` : '') : ' <span class="muted">未所持</span>'}`; };
-    const table = (side, list) => `<h4>${side === 'A' ? '右上 (A)' : '左下 (B)'} のランキング（${list.length} 枚）</h4>
-      <div class="scroll"><table><thead><tr><th>#</th><th>カード</th><th>平均（黒）</th><th>最悪の相手側カード</th><th>評価済みの相手側</th></tr></thead><tbody>` +
-      list.map((r, i) => `<tr class="clickable${R.sel?.side === side && R.sel.id === r.id ? ' active' : ''}" data-rank-side="${side}" data-rank-id="${esc(r.id)}">
+    const table = (side, list) => {
+      const t = side === 'A' ? 'rankA' : 'rankB';
+      const rows = sortRows(list, t, { mean: (r) => r.mean, best: (r) => r.best.v, worst: (r) => r.worst.v, sil: (r) => r.sil, base: (r) => r.mean });
+      return `<h4>${side === 'A' ? '右上 (A)' : '左下 (B)'} のランキング（${list.length} 枚）</h4>
+      <div class="scroll"><table><thead><tr><th>#</th><th>カード</th>${sortTh(t, 'mean', '平均（黒）')}${sortTh(t, 'best', '最高の相手側カード')}${sortTh(t, 'worst', '最低の相手側カード')}` +
+        `${sortTh(t, 'sil', 'シル平均', '囲碁シル AI の記録がある組だけの黒の勝率の平均（括弧内は記録の数）。')}<th>評価済みの相手側</th></tr></thead><tbody>` +
+      rows.map((r, i) => `<tr class="clickable${R.sel?.side === side && R.sel.id === r.id ? ' active' : ''}" data-rank-side="${side}" data-rank-id="${esc(r.id)}">
         <td>${i + 1}</td><td>${cardCell(r.id)}</td><td><b>${val(r.mean, r.complete)}</b></td>
+        <td>${val(r.best.v, r.best.cell?.complete)} <span class="muted">${esc(cardById(r.best.id).name)}</span></td>
         <td>${val(r.worst.v, r.worst.cell?.complete)} <span class="muted">${esc(cardById(r.worst.id).name)}</span></td>
+        <td>${r.sil == null ? '' : `<span class="${r.sil > 50 ? 'sil-win' : 'sil'}">${r.sil.toFixed(r.silN > 1 ? 1 : 0)}%</span> <span class="muted">（${r.silN}）</span>`}</td>
         <td class="muted">${r.n} / ${r.total}</td></tr>`).join('') + '</tbody></table></div>';
+    };
     let html = `<h3>カードのランキング${quick ? '［自分の 2 隅だけで評価］' : ''}${R.provisional ? '（暫定: 評価済みの組から）' : ''}</h3>
       <div class="muted">平均 = 相手側の各カード（向きは良いほう）と組んだときの、${quick ? '自分の 2 隅だけの局面' : '相手の最善応手に対する'}黒の勝率の平均。` +
       `${quick ? '' : '「≤」は相手の応手をまだ全部評価していない値（評価が進むと下がることがあります）。'}行をクリックすると、相手側カードごとの内訳とシチョウの情報を表示します。</div>` +
@@ -1091,13 +1136,15 @@
     const r = (R.sel.side === 'A' ? R.A : R.B).find((x) => x.id === R.sel.id);
     if (!r) { el.innerHTML = ''; return; }
     const quick = R.cand.quick, other = R.sel.side === 'A' ? '左下 (B)' : '右上 (A)';
-    const rows = [...r.partners].sort((a, b) => b.v - a.v);
+    const val = (v, complete) => `${complete || quick ? '' : '≤ '}${pct(v)}`;
+    const rows = sortRows(r.partners, 'detail', { v: (p) => p.v, sil: (p) => silB(p.cell), base: (p) => p.v });
     let html = `<h4>「${esc(cardById(r.id).name)}」の内訳（相手側 ${other} のカードごと）</h4>
-      <div class="scroll"><table><thead><tr><th>${other}</th><th>黒勝率</th><th>右上 (A) / 左下 (B) の向き</th>${quick ? '' : '<th>相手の最善応手</th>'}</tr></thead><tbody>` +
+      <div class="muted">平均 ${val(r.mean, r.complete)}・最高 ${val(r.best.v, r.best.cell?.complete)}・最低 ${val(r.worst.v, r.worst.cell?.complete)}</div>
+      <div class="scroll"><table><thead><tr><th>${other}</th>${sortTh('detail', 'v', '黒勝率')}${sortTh('detail', 'sil', 'シル', '囲碁シル AI で記録した黒の勝率。')}<th>右上 (A) / 左下 (B) の向き</th>${quick ? '' : '<th>相手の最善応手</th>'}</tr></thead><tbody>` +
       rows.map((p, k) => {
         const c = p.cell;
         return `<tr class="clickable" data-rank-cell="${k}"><td>${esc(cardById(p.id).name)}${isOwned(cardById(p.id)) ? '' : ' <span class="muted">未所持</span>'}</td>
-          <td><b>${c ? vText(c) : pct(p.v)}</b>${silHtml(c)}</td><td class="muted">${c ? `${c.a.flip ? '反転' : 'そのまま'} / ${c.b.flip ? '反転' : 'そのまま'}` : ''}</td>
+          <td><b>${c ? vText(c) : pct(p.v)}</b></td><td>${silCellHtml(c)}</td><td class="muted">${c ? `${c.a.flip ? '反転' : 'そのまま'} / ${c.b.flip ? '反転' : 'そのまま'}` : ''}</td>
           ${quick ? '' : `<td>${c?.resp ? `${cardHtml(c.resp.TL)}<br>${cardHtml(c.resp.BR)}` : ''}</td>`}</tr>`;
       }).join('') + '</tbody></table></div><div class="muted">行をクリックすると、その組（と相手の最善応手）を盤面に反映します。</div>';
     // シチョウ
@@ -1140,7 +1187,7 @@
   $('#def-fixed-clear').onclick = () => { fixed.A = [null, null, null]; fixed.B = [null, null, null]; renderFixed(); saveFixed(); };
   // refresh: 囲碁シル AI の記録が変わったときに表を描き直す
   window.defense = { bestSets, buildMatrix, topCards, clear: clearDefense,
-    refresh: () => { if (st.result) renderBest(); if (lastPairCells) renderPairs(lastPairCells); if (lastRank) drawRanking(); } };  // テスト・デバッグ用
+    refresh: () => { if (st.result) renderBest(); if (lastPairCells) renderPairs(lastPairCells); if (lastRank) renderRanking(lastRank.cand, lastRank.cells, lastRank.provisional); } };  // テスト・デバッグ用
   $('#def-run').onclick = () => runDefense();
   $('#def-cancel').onclick = () => { st.cancel = true; abortAnalyze(); };
 })();
