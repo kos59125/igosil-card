@@ -397,9 +397,9 @@
   const silOf = (cell) => {
     if (!cell?.resp || typeof igosilOf !== 'function') return null;
     const rec = igosilOf({ TR: cell.a, BL: cell.b, TL: cell.resp.TL || null, BR: cell.resp.BR || null });
-    return rec ? 1 - rec.wrWhite : null;
+    return rec || null;
   };
-  const silHtml = (cell) => { const v = silOf(cell); return v == null ? '' : `<div class="muted" style="color:var(--accent)" title="囲碁シル AI で記録した黒の勝率（相手の最善応手の配置）">シル ${pct(v)}</div>`; };
+  const silHtml = (cell) => { const rec = silOf(cell); return rec ? `<div class="muted" style="color:var(--accent)" title="囲碁シル AI で記録した黒の勝率（相手の最善応手の配置）">シル ${silFmt(rec, 'B')}</div>` : ''; };
   let lastPairCells = null;
   function renderPairs(cells) {
     lastPairCells = cells;

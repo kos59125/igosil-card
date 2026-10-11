@@ -218,7 +218,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     <div id="sil-box" title="囲碁シルの AI は KataGo と異なるので、勝率が違うことがあります。ゲームで確認した勝率をこの配置（4 隅のカードと向き）に記録しておけます">
       <div class="muted" id="sil-label">囲碁シル AI での白（自分）の勝率</div>
       <div class="row"><span id="sil-wr">—</span><span class="muted" id="sil-diff"></span></div>
-      <div class="row"><input type="number" id="sil-input" min="0" max="100" step="0.1" style="width:6em" placeholder="例: 62.5"> %
+      <div class="row"><input type="number" id="sil-input" min="0" max="100" step="1" style="width:5em" placeholder="例: 62"> %
+        <select id="sil-ahead" title="囲碁シルは 50% と表示していても、小数点以下でどちらが優勢かを判定しています"><option value="">優勢は？</option><option value="me">自分が優勢</option><option value="opp">相手が優勢</option></select>
         <button id="sil-save">記録</button><button id="sil-del">削除</button></div>
       <div class="muted" id="sil-note"></div>
     </div>
@@ -647,7 +648,16 @@ function indexIgosil() {
 const placementLabel = (pl) => CORNER_ORDER.map((k) => { const c = pl[k] && cardById(pl[k].id); return c ? `${c.name}${pl[k].flip ? '（反転）' : ''}` : '（なし）'; }).join(' / ');
 const igosilEntry = (pl) => { const pk = positionKey(pl); return (pk && igosilIndex.get(pk)) || null; };
 const igosilOf = (pl) => igosilEntry(pl)?.rec || null;
-const silText = (pl) => { const r = igosilOf(pl); return r ? (r.wrWhite * 100).toFixed(1) + '%' : ''; };
+/**
+ * 囲碁シルの勝率の表示（色 c の勝率、整数 %）。囲碁シルは整数で表示し、50% のときは小数点以下でどちらが優勢かを
+ * 判定しているので、記録した優勢（rec.ahead: 'B' / 'W'）を添える
+ */
+function silFmt(rec, c) {
+  if (!rec) return '';
+  const v = Math.round((c === 'W' ? rec.wrWhite : 1 - rec.wrWhite) * 100);
+  return `${v}%${v === 50 && rec.ahead ? (rec.ahead === c ? '（優勢）' : '（劣勢）') : ''}`;
+}
+const silText = (pl) => silFmt(igosilOf(pl), 'W');
 async function loadIgosil() {
   try { igosil = (await api('GET', '/api/igosil')).records || {}; } catch { igosil = {}; }
 }
@@ -655,14 +665,14 @@ async function loadIgosil() {
 function igosilChanged() {
   indexIgosil(); updateSil(); renderSilRecords(); scheduleResults(); window.defense?.refresh?.();
 }
-async function saveIgosil(pl, wrWhite) {
+async function saveIgosil(pl, wrWhite, ahead = '') {
   const pk = positionKey(pl);
   if (!pk) throw new Error('配置が衝突しているか、石がありません');
   // 同じ局面の記録が別のキー（以前の形式や、反転・回転した配置）で残っていれば消す
   const old = igosilIndex.get(pk);
   if (old && old.key !== pk) igosil = (await api('POST', '/api/igosil', { key: old.key, wrWhite: null })).records || {};
   if (wrWhite != null) {
-    igosil = (await api('POST', '/api/igosil', { key: pk, wrWhite, placement: placementKey(pl), label: placementLabel(pl) })).records || {};
+    igosil = (await api('POST', '/api/igosil', { key: pk, wrWhite, ahead, placement: placementKey(pl), label: placementLabel(pl) })).records || {};
     if (lastEval?.r && placementKey(pl) === placementKey(placement)) silKataGo.set(pk, lastEval.r.winrateWhite);
   } else if (!old || old.key === pk) {
     igosil = (await api('POST', '/api/igosil', { key: pk, wrWhite: null })).records || {};
@@ -677,10 +687,18 @@ function updateSil() {
   const rec = igosilOf(placement);
   const any = CORNER_ORDER.some((k) => placement[k]);
   $('#sil-save').disabled = !any; $('#sil-input').disabled = !any;
+  $('#sil-ahead').style.display = Math.round(+$('#sil-input').value) === 50 && $('#sil-input').value !== '' ? '' : 'none';
   $('#sil-del').disabled = !rec;
-  $('#sil-wr').textContent = rec ? (mine(rec.wrWhite) * 100).toFixed(1) + '%' : '—';
+  $('#sil-wr').textContent = rec ? silFmt(rec, myColor()).replace('（優勢）', '（自分が優勢）').replace('（劣勢）', '（相手が優勢）') : '—';
   const kg = lastEval?.r;
-  $('#sil-diff').textContent = rec && kg ? `KataGo との差 ${((mine(rec.wrWhite) - mine(kg.winrateWhite)) * 100 >= 0 ? '+' : '')}${((mine(rec.wrWhite) - mine(kg.winrateWhite)) * 100).toFixed(1)} pt` : '';
+  let diff = '';
+  if (rec && kg) {
+    const sil = Math.round(mine(rec.wrWhite) * 100), k = mine(kg.winrateWhite) * 100, d = sil - k;
+    diff = `KataGo との差 ${d >= 0 ? '+' : ''}${d.toFixed(1)} pt`;
+    // 50% のときは、どちらが優勢かが KataGo と同じかを添える
+    if (sil === 50 && rec.ahead) diff += (rec.ahead === (kg.winrateWhite >= 0.5 ? 'W' : 'B')) ? '（優勢は KataGo と同じ）' : '（優勢は KataGo と逆）';
+  }
+  $('#sil-diff').textContent = diff;
   const ent = igosilEntry(placement);
   const same = ent && placementKey(ent.pl) === placementKey(placement);
   $('#sil-note').textContent = rec ? `${rec.at} に記録${same ? '' : `（反転・回転で同じ局面になる配置: ${placementLabel(ent.pl)}）`}` : (any ? 'この配置の記録はありません' : 'カードを置くと記録できます');
@@ -695,8 +713,8 @@ function renderSilRecords() {
     const pl = recordPlacement(key, r) || {};
     const known = !!plKey.get(key) && CORNER_ORDER.every((k) => !pl[k] || cardById(pl[k].id));
     const cached = known ? silKataGo.get(positionKey(pl)) : null;
-    return `<tr><td>${known ? CORNER_ORDER.map((k) => placementText(pl[k])).join(' / ') : esc(r.label || key)}</td><td><b>${(r.wrWhite * 100).toFixed(1)}%</b></td>
-      <td class="muted">${cached != null ? `${((r.wrWhite - cached) * 100 >= 0 ? '+' : '')}${((r.wrWhite - cached) * 100).toFixed(1)} pt` : ''}</td>
+    return `<tr><td>${known ? CORNER_ORDER.map((k) => placementText(pl[k])).join(' / ') : esc(r.label || key)}</td><td><b>${silFmt(r, 'W')}</b></td>
+      <td class="muted">${cached != null ? (() => { const d = Math.round(r.wrWhite * 100) - cached * 100; return `${d >= 0 ? '+' : ''}${d.toFixed(1)} pt`; })() : ''}</td>
       <td class="muted nw">${esc(r.at)}</td>
       <td class="nw"><button data-sil-apply="${esc(plKey.get(key) || '')}"${known ? '' : ' disabled'}>反映</button> <button data-sil-del="${esc(key)}">削除</button></td></tr>`;
   }).join('');
@@ -1628,11 +1646,20 @@ function setRole(r) {
 $$('.tabs button').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
 $('#btn-eval').onclick = evaluateCurrent;
 $('#sil-save').onclick = () => {
-  const v = parseFloat($('#sil-input').value);
-  if (!Number.isFinite(v) || v < 0 || v > 100) { alert('勝率を 0〜100 の数値（%）で入力してください'); return; }
+  const raw = $('#sil-input').value.trim(), v = Number(raw);
+  if (!raw || !Number.isInteger(v) || v < 0 || v > 100) { alert('勝率を 0〜100 の整数（%）で入力してください（囲碁シルの表示のまま）'); return; }
+  // 50% のときは、囲碁シルが判定している優勢を必ず選ぶ
+  let ahead = '';
+  if (v === 50) {
+    const a = $('#sil-ahead').value;
+    if (!a) { alert('50% のときは、どちらが優勢かを選んでください（囲碁シルは小数点以下で優勢を判定しています）'); $('#sil-ahead').focus(); return; }
+    ahead = a === 'me' ? myColor() : (myColor() === 'W' ? 'B' : 'W');
+  }
   const mine = v / 100;
-  saveIgosil({ ...placement }, myColor() === 'W' ? mine : 1 - mine).then(() => { $('#sil-input').value = ''; }).catch((e) => alert('記録できませんでした: ' + e.message));
+  saveIgosil({ ...placement }, myColor() === 'W' ? mine : 1 - mine, ahead)
+    .then(() => { $('#sil-input').value = ''; $('#sil-ahead').value = ''; updateSil(); }).catch((e) => alert('記録できませんでした: ' + e.message));
 };
+$('#sil-input').addEventListener('input', updateSil);
 $('#sil-input').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('#sil-save').click(); });
 $('#sil-del').onclick = () => {
   if (!igosilOf(placement) || !confirm('この配置の囲碁シル AI の勝率の記録を削除しますか？')) return;

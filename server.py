@@ -409,15 +409,17 @@ def load_igosil():
             w = float(v.get("wrWhite"))
             if 0 <= w <= 1:
                 out[str(k)] = {"wrWhite": w, "at": str(v.get("at") or ""), "label": str(v.get("label") or ""),
-                               "placement": str(v.get("placement") or "")}
+                               "placement": str(v.get("placement") or ""),
+                               "ahead": v.get("ahead") if v.get("ahead") in ("B", "W") else ""}
         return out
     except (OSError, ValueError, TypeError, AttributeError):
         return {}
 
 
-def save_igosil_record(key, wr_white, label="", placement=""):
+def save_igosil_record(key, wr_white, label="", placement="", ahead=""):
     """1 件の記録を追加・更新する。key は局面のキー（反転・回転で同じになる配置は同じキー）、
-    placement は記録したときの配置（4 隅のカードと向き）。wr_white が None なら削除"""
+    placement は記録したときの配置（4 隅のカードと向き）。wr_white が None なら削除。
+    ahead は 50% のときにどちらが優勢か（'B' / 'W'）。囲碁シルは整数で表示し、50% でも小数点以下で優勢を判定している"""
     key = str(key or "").strip()
     if not key or len(key) > 400:
         raise ValueError("配置のキーが正しくありません")
@@ -430,7 +432,8 @@ def save_igosil_record(key, wr_white, label="", placement=""):
             if not 0 <= w <= 1:
                 raise ValueError("勝率は 0〜100% で指定してください")
             records[key] = {"wrWhite": round(w, 5), "at": time.strftime("%Y-%m-%d %H:%M"), "label": str(label or "")[:300],
-                            "placement": str(placement or "")[:400]}
+                            "placement": str(placement or "")[:400],
+                            "ahead": ahead if ahead in ("B", "W") and round(w * 100) == 50 else ""}
         os.makedirs(DATA_DIR, exist_ok=True)
         tmp = IGOSIL_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -934,7 +937,7 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == "/api/igosil":
                 body = self._body()
                 try:
-                    records = save_igosil_record(body.get("key"), body.get("wrWhite"), body.get("label"), body.get("placement"))
+                    records = save_igosil_record(body.get("key"), body.get("wrWhite"), body.get("label"), body.get("placement"), body.get("ahead"))
                 except (ValueError, TypeError) as e:
                     return self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
                 return self._json({"records": records})
