@@ -153,6 +153,9 @@ tr.row-new { animation: row-in 1.8s ease-out; }
 #opt-results tbody tr.rrow td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-top: 0; padding-bottom: 0; }
 #opt-results tbody tr.rrow.current td { font-weight: 600; background: var(--selected); }
 #opt-results td.sil { color: var(--accent); }
+.sil-win, #opt-results td.sil.sil-win, #sil-wr.sil-win { color: var(--ok); }  /* 囲碁シルの判定で勝勢（その色の勝率が 50% 超、または 50% で優勢） */
+#opt-results th[data-sort] { cursor: pointer; user-select: none; white-space: nowrap; }
+#opt-results th[data-sort]:hover { color: var(--accent-2); }
 #sil-box { margin-top: 10px; padding: 6px 8px; border-left: 3px solid var(--accent); background: var(--bg); border-radius: 0 6px 6px 0; }
 #sil-box .row { margin: 2px 0; }
 #sil-wr { font-size: 22px; font-weight: 700; color: var(--accent); }
@@ -266,7 +269,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <div class="row" style="margin:4px 0 2px"><span id="opt-caption"></span><span style="flex:1"></span><span class="muted" id="opt-count"></span></div>
       <div class="results-box" id="opt-results-box">
         <table id="opt-results"><colgroup><col style="width:52px"><col style="width:62px"><col style="width:54px"><col style="width:54px"><col><col><col style="width:42px"></colgroup>
-          <thead><tr><th>#</th><th>白勝率</th><th>リード</th><th title="囲碁シル AI で記録した白の勝率（記録がある組み合わせだけ）">シル</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
+          <thead><tr><th>#</th><th data-sort="kg" title="クリックで KataGo の白勝率の順に並べ替え（もう一度で昇順・降順を切り替え）">白勝率▼</th><th>リード</th><th data-sort="sil" title="囲碁シル AI で記録した白の勝率（記録がある組み合わせだけ）。クリックでシルの勝率の順に並べ替え（記録のない組み合わせは後ろ）">シル</th><th>左上 (A)</th><th>右下 (B)</th><th>相性</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="muted">結果の行をクリックすると盤面に反映します。</div>
     </div>
@@ -657,13 +660,22 @@ function silFmt(rec, c) {
   const v = Math.round((c === 'W' ? rec.wrWhite : 1 - rec.wrWhite) * 100);
   return `${v}%${v === 50 && rec.ahead ? (rec.ahead === c ? '（優勢）' : '（劣勢）') : ''}`;
 }
+/** 並べ替え用の値（色 c の整数 %。50% は優勢なら少し上、劣勢なら少し下） */
+function silValue(rec, c) {
+  if (!rec) return null;
+  const v = Math.round((c === 'W' ? rec.wrWhite : 1 - rec.wrWhite) * 100);
+  return v === 50 && rec.ahead ? v + (rec.ahead === c ? 0.1 : -0.1) : v;
+}
+/** 囲碁シルの判定で色 c が勝勢か（50% 超、または 50% で優勢） */
+const silWin = (rec, c) => { const v = silValue(rec, c); return v != null && v > 50; };
 const silText = (pl) => silFmt(igosilOf(pl), 'W');
 async function loadIgosil() {
   try { igosil = (await api('GET', '/api/igosil')).records || {}; } catch { igosil = {}; }
 }
 /** 記録の読み込み・変更のあとに、表示を合わせる */
 function igosilChanged() {
-  indexIgosil(); updateSil(); renderSilRecords(); scheduleResults(); window.defense?.refresh?.();
+  indexIgosil(); updateSil(); renderSilRecords();
+  if (resultSort.key === 'sil') sortResults(); else scheduleResults(); window.defense?.refresh?.();
 }
 async function saveIgosil(pl, wrWhite, ahead = '') {
   const pk = positionKey(pl);
@@ -689,6 +701,7 @@ function updateSil() {
   $('#sil-save').disabled = !any; $('#sil-input').disabled = !any;
   $('#sil-ahead').style.display = Math.round(+$('#sil-input').value) === 50 && $('#sil-input').value !== '' ? '' : 'none';
   $('#sil-del').disabled = !rec;
+  $('#sil-wr').classList.toggle('sil-win', silWin(rec, myColor()));
   $('#sil-wr').textContent = rec ? silFmt(rec, myColor()).replace('（優勢）', '（自分が優勢）').replace('（劣勢）', '（相手が優勢）') : '—';
   const kg = lastEval?.r;
   let diff = '';
@@ -713,7 +726,7 @@ function renderSilRecords() {
     const pl = recordPlacement(key, r) || {};
     const known = !!plKey.get(key) && CORNER_ORDER.every((k) => !pl[k] || cardById(pl[k].id));
     const cached = known ? silKataGo.get(positionKey(pl)) : null;
-    return `<tr><td>${known ? CORNER_ORDER.map((k) => placementText(pl[k])).join(' / ') : esc(r.label || key)}</td><td><b>${silFmt(r, 'W')}</b></td>
+    return `<tr><td>${known ? CORNER_ORDER.map((k) => placementText(pl[k])).join(' / ') : esc(r.label || key)}</td><td><b class="${silWin(r, 'W') ? 'sil-win' : ''}">${silFmt(r, 'W')}</b></td>
       <td class="muted">${cached != null ? (() => { const d = Math.round(r.wrWhite * 100) - cached * 100; return `${d >= 0 ? '+' : ''}${d.toFixed(1)} pt`; })() : ''}</td>
       <td class="muted nw">${esc(r.at)}</td>
       <td class="nw"><button data-sil-apply="${esc(plKey.get(key) || '')}"${known ? '' : ' disabled'}>反映</button> <button data-sil-del="${esc(key)}">削除</button></td></tr>`;
@@ -1370,7 +1383,31 @@ const FRESH_MS = 1800;  // 新しく入った行を強調表示する時間
 let lastResults = [];
 let resultsEmptyText = '';
 /** 並び順: 白勝率の高い順、同じなら属性相性の良い順 */
-const compareResults = (a, b) => b.winrateWhite - a.winrateWhite || matchupScore(b.pl) - matchupScore(a.pl);
+/**
+ * 並び順: 既定は KataGo の白勝率の高い順（同じなら属性相性の良い順）。見出しのクリックで、シルの勝率の順・昇順にもできる。
+ * シルの順では、記録のない組み合わせは後ろに KataGo の順で並べる
+ */
+const resultSort = { key: 'kg', desc: true };
+const byKataGo = (a, b) => b.winrateWhite - a.winrateWhite || matchupScore(b.pl) - matchupScore(a.pl);
+function compareResults(a, b) {
+  const dir = resultSort.desc ? 1 : -1;
+  if (resultSort.key === 'sil') {
+    const x = silValue(igosilOf(a.pl), 'W'), y = silValue(igosilOf(b.pl), 'W');
+    if (x != null || y != null) {
+      if (x == null) return 1;
+      if (y == null) return -1;
+      if (x !== y) return dir * (y - x);
+    }
+  }
+  return dir * byKataGo(a, b);
+}
+function sortResults() {
+  lastResults.sort(compareResults);
+  $$('#opt-results th[data-sort]').forEach((th) => {
+    th.textContent = th.textContent.replace(/[▼▲]$/, '') + (th.dataset.sort === resultSort.key ? (resultSort.desc ? '▼' : '▲') : '');
+  });
+  scheduleResults();
+}
 /** カード id → 絞り込み判定用の情報 */
 function cardItem(id) { const c = id && cardById(id); return c && { id: c.id, attr: c.attr || '', group: groupShort(c), groupLabel: groupName(c), name: c.name, rank: rankOf(c.id) }; }
 const resultFilters = {};
@@ -1428,7 +1465,7 @@ function drawResults() {
     const tip = `${cardItem(r.pl.TL?.id)?.name || '（なし）'}${r.pl.TL?.flip ? '（反転）' : ''} / ${cardItem(r.pl.BR?.id)?.name || '（なし）'}${r.pl.BR?.flip ? '（反転）' : ''}`;
     const isCur = sameCorner(r.pl.TL) + '|' + sameCorner(r.pl.BR) === cur;
     rows.push(`<tr class="rrow clickable${isCur ? ' current' : ''}" data-d="${drawnResults.length - 1}"${style} title="${esc(tip)}"><td>${k + 1}</td><td><b>${(r.winrateWhite * 100).toFixed(1)}%</b></td>
-      <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td><td class="sil">${silText(r.pl)}</td><td>${placementCell(r.pl.TL)}</td><td>${placementCell(r.pl.BR)}</td>
+      <td>${r.scoreLeadWhite >= 0 ? '+' : ''}${r.scoreLeadWhite.toFixed(1)}</td><td class="sil${silWin(igosilOf(r.pl), 'W') ? ' sil-win' : ''}">${silText(r.pl)}</td><td>${placementCell(r.pl.TL)}</td><td>${placementCell(r.pl.BR)}</td>
       <td class="${m > 0 ? 'good' : m < 0 ? 'badc' : 'muted'}">${m > 0 ? '+' : ''}${m}</td></tr>`);
   }
   tb.innerHTML = `<tr class="spacer" style="height:${start * RESULT_ROW_H}px"><td colspan="7"></td></tr>${rows.join('')}` +
@@ -1467,6 +1504,12 @@ function renderResults(results, caption = '') {
 // 結果の挿入で順位（配列の位置）がずれるため、行は描いた時点の結果（drawnResults）で引く
 let drawnResults = [];
 const sameCorner = (p) => (p ? `${p.id}:${p.flip ? 1 : 0}` : '-');
+$('#opt-results thead').addEventListener('click', (ev) => {
+  const th = ev.target.closest('th[data-sort]'); if (!th) return;
+  if (resultSort.key === th.dataset.sort) resultSort.desc = !resultSort.desc;
+  else { resultSort.key = th.dataset.sort; resultSort.desc = true; }
+  sortResults();
+});
 $('#opt-results').addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0) return;
   const tr = ev.target.closest('tr[data-d]'); if (!tr) return;

@@ -399,7 +399,7 @@
     const rec = igosilOf({ TR: cell.a, BL: cell.b, TL: cell.resp.TL || null, BR: cell.resp.BR || null });
     return rec || null;
   };
-  const silHtml = (cell) => { const rec = silOf(cell); return rec ? `<div class="muted" style="color:var(--accent)" title="囲碁シル AI で記録した黒の勝率（相手の最善応手の配置）">シル ${silFmt(rec, 'B')}</div>` : ''; };
+  const silHtml = (cell) => { const rec = silOf(cell); return rec ? `<div class="muted${silWin(rec, 'B') ? ' sil-win' : ''}" style="${silWin(rec, 'B') ? '' : 'color:var(--accent)'}" title="囲碁シル AI で記録した黒の勝率（相手の最善応手の配置）">シル ${silFmt(rec, 'B')}</div>` : ''; };
   let lastPairCells = null;
   function renderPairs(cells) {
     lastPairCells = cells;
