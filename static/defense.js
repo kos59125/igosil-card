@@ -37,8 +37,10 @@
     <div class="row"><b style="font-size:12px">探索の種類:</b>
       <label><input type="radio" name="def-mode" value="sets" checked> 6 枚の組み合わせ（A 3 枚 + B 3 枚）</label>
       <label><input type="radio" name="def-mode" value="pair"> 特定のカードと対になる 3 枚</label>
-      <label><input type="radio" name="def-mode" value="single"> 単一のカード</label>
+      <label><input type="radio" name="def-mode" value="single"> 単一のカード（A・B それぞれのランキング）</label>
     </div>
+    <div class="row muted" id="def-single-note">右上 (A) × 左下 (B) の全組み合わせを評価し、相手側のカードがどれでも強いカードを A・B それぞれランキングします。
+      カードの点数 = 相手側の各カード（向きは良いほう）と組んだときの、相手の最善応手に対する黒の勝率の平均です。最悪の相手側カードも表示します。</div>
     <div class="row" id="def-eval-row"><b style="font-size:12px">評価の方法:</b>
       <label><input type="radio" name="def-eval" value="full" checked> 相手の応手まで探索（正確・時間がかかる）</label>
       <label><input type="radio" name="def-eval" value="quick"> 自分の右上・左下だけで評価（速い）</label>
@@ -49,7 +51,7 @@
     <div class="row muted" id="def-quick-note">相手の隅（左上・右下）は空けたまま、自分の右上・左下の 2 枚だけを置いた局面の黒の勝率で組を評価し、同じ方法で採用するカードを選びます（1 組 1 局面）。
       相手の応手は考慮しないので、実際の勝率より高めに出ます。候補のふるい分けや、おおまかな比較に使ってください。</div>
     <div id="def-pair-wrap" class="row">
-      <select id="def-anchor-side"><option value="B">左下 (B) のカード</option><option value="A">右上 (A) のカード</option></select>
+      <select id="def-anchor-side"><option value="A">右上 (A) のカード</option><option value="B">左下 (B) のカード</option></select>
       <div id="def-anchor-slot" class="picker-slot" style="flex:1;min-width:0"></div>
       <div class="muted" style="flex-basis:100%" id="def-pair-help">選んだカード（種類だけを指定し、向きは解析して決めます）が選ばれたとき、反対側の 3 枚（各 1/3）で期待勝率が最大になる組み合わせを探します。
         下の属性・所持・ランクの条件は反対側の候補に使います。</div>
@@ -103,6 +105,7 @@
     #def-single.provisional { border-style: dashed; }
     #def-single h3 { margin: 0 0 6px; font-size: 14px; }
     #def-single h4 { margin: 10px 0 4px; font-size: 13px; }
+    #def-single tr.active { background: var(--selected); }
     #def-single td { vertical-align: top; }
     .lad-good { color: var(--ok); } .lad-bad { color: var(--bad); }
     .def-fixed-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: start; margin: 4px 0; }
@@ -218,22 +221,18 @@
   function applyMode() {
     const pair = mode() === 'pair', single = mode() === 'single';
     const show = (sel, on) => { $(sel).style.display = on ? '' : 'none'; };
-    show('#def-pair-wrap', pair || single);
+    show('#def-pair-wrap', pair);
     show('#def-fixed-wrap', !pair && !single);
     $('#def-anchor-side').value = anchor.side;
     anchorPicker.value = anchorCard()?.id || null;
-    $('#def-pair-help').textContent = single
-      ? '選んだカード 1 枚だけを置き（反対側の自分の隅は空き）、相手（白）が全カード・両方の向きから最善の応手をしたときの黒の勝率を調べます。向きは両方とも調べます。' +
-        'シチョウ（石を取れるか・取られるか）が相手や自分のほかのカードで変わる場合は、その情報も表示します。'
-      : '選んだカード（種類だけを指定し、向きは解析して決めます）が選ばれたとき、反対側の 3 枚（各 1/3）で期待勝率が最大になる組み合わせを探します。下の属性・所持・ランクの条件は反対側の候補に使います。';
+    $('#def-pair-help').textContent = '選んだカード（種類だけを指定し、向きは解析して決めます）が選ばれたとき、反対側の 3 枚（各 1/3）で期待勝率が最大になる組み合わせを探します。下の属性・所持・ランクの条件は反対側の候補に使います。';
     $('#def-attr-label').textContent = pair ? `${anchor.side === 'A' ? '左下 (B)' : '右上 (A)'} の候補の属性:` : '自分の候補の属性:';
-    $('#def-run').textContent = single ? 'このカードを調べる' : pair ? '対になる 3 枚を探す' : '最適な防御を探す';
-    // 単一のカードは評価の方法・候補の条件を使わない
-    show('#def-eval-row', !single); show('#def-cond-attr', !single); show('#def-cond-own', !single);
-    show('#def-quick-note', !single && quickEval());
-    show('#def-two-note', !single && evalMode() === 'two');
-    show('#def-opp-note', single || !quickEval());
-    show('#def-best', !single); show('#def-pairs-wrap', !single);
+    $('#def-run').textContent = single ? 'ランキングを作る' : pair ? '対になる 3 枚を探す' : '最適な防御を探す';
+    show('#def-quick-note', quickEval());
+    show('#def-two-note', evalMode() === 'two');
+    show('#def-opp-note', !quickEval());
+    show('#def-best', !single);
+    $('#def-single-note').style.display = single ? '' : 'none';
   }
   {
     const m = store.get(MODE_KEY, 'sets');
@@ -295,9 +294,10 @@
     const ownedOnly = $('#def-owned').checked, flip = $('#def-flip').checked, minRank = +$('#def-min-rank').value || 0;
     const isSym = (key, id) => { const c = cardById(id); return stoneSig(c, key, false) === stoneSig(c, key, true); };
     // 対になる 3 枚を探すときは、基準のカードを 1 枚だけの側として固定し、反対側の 3 枚を探す
-    const pair = mode() === 'pair', anc = pair ? anchorCard() : null;
-    const fixedA = pair ? (anchor.side === 'A' && anc ? [anc] : []) : fixedList('A');
-    const fixedB = pair ? (anchor.side === 'B' && anc ? [anc] : []) : fixedList('B');
+    const pair = mode() === 'pair', single = mode() === 'single', anc = pair ? anchorCard() : null;
+    // 単一のカード（ランキング）は固定したカードを使わない
+    const fixedA = pair ? (anchor.side === 'A' && anc ? [anc] : []) : single ? [] : fixedList('A');
+    const fixedB = pair ? (anchor.side === 'B' && anc ? [anc] : []) : single ? [] : fixedList('B');
     const sizeA = pair && anchor.side === 'A' ? 1 : SET_SIZE, sizeB = pair && anchor.side === 'B' ? 1 : SET_SIZE;
     // 自分の候補 = 固定したカード（両方の向き）+ 条件に合うほかのカード（固定で枚数が埋まっていれば追加しない）
     const side = (key, fixedSide, size, anchorSide) => {
@@ -311,7 +311,7 @@
     };
     const A = side('TR', fixedA, sizeA, pair && anchor.side === 'A'), B = side('BL', fixedB, sizeB, pair && anchor.side === 'B');
     return { myA: A.cards, myB: B.cards, rowsA: A.rows, colsB: B.rows, fixedA, fixedB, flip, items: makeItems(A.rows, B.rows), sizeA, sizeB,
-      quick: quickEval(), two: evalMode() === 'two',
+      quick: quickEval(), two: evalMode() === 'two', single,
       pair: pair ? { side: anchor.side, card: anc } : null,
       oppA: listCandidates('TL'), oppB: listCandidates('BR') };
   }
@@ -332,7 +332,6 @@
 
   function updateEstimate() {
     if (!cards.length) return;
-    if (mode() === 'single') { $('#def-estimate').textContent = singleEstimate(); return; }
     const { myA, myB, items, oppA, oppB, fixedA, fixedB, pair, quick, two } = currentCandidates();
     const upper = quick ? items.length : items.length * oppA.length * oppB.length;
     const rate = store.get(RATE_KEY, 0);
@@ -600,6 +599,7 @@
   /** 評価済みの組から 3 + 3 を選んで表示する */
   function computeSets(cand, cells, { provisional, items }) {
     const t = performance.now();
+    if (cand.single) { renderRanking(cand, cells, provisional); return performance.now() - t; }
     const m = buildMatrix(cand, cells);
     // 内訳を表示中の組み合わせは、順位が変わっても選んだままにする
     const prev = st.result && st.sets[st.shownSet] ? setKey(st.sets[st.shownSet], st.result.rowsA, st.result.colsB) : null;
@@ -640,7 +640,7 @@
     $('#def-context').innerHTML = '';
     st.result = null; st.sets = [];
     renderBest();
-    $('#def-single').innerHTML = ''; $('#def-single').classList.remove('provisional'); lastSingle = null;
+    $('#def-single').innerHTML = ''; $('#def-single').classList.remove('provisional'); lastRank = null;
     $('#def-info').textContent = '';
     $('#def-progress').style.width = '0';
     $('#def-run').disabled = false; $('#def-cancel').disabled = true;
@@ -661,7 +661,6 @@
   }
 
   async function runDefense() {
-    if (mode() === 'single') { await runSingle(); return; }
     const cand = currentCandidates();
     const { myA, myB, pair } = cand;
     if (pair && !pair.card) { alert(`基準にする${pair.side === 'A' ? '右上 (A)' : '左下 (B)'} のカードを選んでください。`); return; }
@@ -669,7 +668,11 @@
       alert(`対になる候補が足りません（${pair.side === 'A' ? '左下 (B)' : '右上 (A)'} に ${SET_SIZE} 枚以上必要です）。属性や所持の条件を見直してください。`);
       return;
     }
-    if (!pair && (myA.length < SET_SIZE || myB.length < SET_SIZE)) {
+    if (cand.single && (!myA.length || !myB.length)) {
+      alert('自分の候補がありません（A・B それぞれ 1 枚以上必要です）。属性や所持の条件を見直してください。');
+      return;
+    }
+    if (!pair && !cand.single && (myA.length < SET_SIZE || myB.length < SET_SIZE)) {
       alert(`自分の候補が足りません（固定したカードと合わせて、A・B それぞれ ${SET_SIZE} 枚以上必要です）。属性や所持の条件を見直してください。`);
       return;
     }
@@ -754,7 +757,7 @@
     const ctxLines = [
       ...(stage ? [stage] : []),
       pair ? `探索: ${pair.side === 'A' ? '右上 (A)' : '左下 (B)'} ${cardTxt(pair.card)} と対になる ${pair.side === 'A' ? '左下 (B)' : '右上 (A)'} 3 枚（基準のカードの向きも解析）`
-        : '探索: 6 枚の組み合わせ（右上 A 3 枚 + 左下 B 3 枚）',
+        : cand.single ? '探索: 単一のカードのランキング（右上 A × 左下 B の全組み合わせから、カードごとの強さ）' : '探索: 6 枚の組み合わせ（右上 A 3 枚 + 左下 B 3 枚）',
       `自分（防御・黒）の候補: 右上 (A) ${myA.length} 枚・左下 (B) ${myB.length} 枚（向き込み ${items.length} 組: 両方反転なし・A のみ反転）`,
       ...(pair ? [] : [`固定: ${cand.fixedA.length || cand.fixedB.length
         ? `右上 ${cand.fixedA.map((f) => cardTxt(f)).join('、') || 'なし'} / 左下 ${cand.fixedB.map((f) => cardTxt(f)).join('、') || 'なし'}` : 'なし'}`]),
@@ -949,7 +952,13 @@
       $('#def-pairs-summary').textContent = `参考: 各組の評価（${quick ? '自分の 2 隅だけの局面' : '相手の最善応手に対する'}黒の勝率、評価済み ${L.touched} / ${L.items} 組）`;
       renderPairs(cells());
       const ms = computeSets(cand, cells(), { provisional: !all, items: items.length });
-      log(`組み合わせの選択: 評価済みの ${L.touched} 組から${pair ? '対になる 3 枚' : ' A・B 3 枚ずつ'}を厳密に探索（${fmtSec(ms / 1000)}）`, run);
+      log(cand.single ? `ランキング: 評価済みの ${L.touched} 組からカードごとの点数を計算（${fmtSec(ms / 1000)}）`
+        : `組み合わせの選択: 評価済みの ${L.touched} 組から${pair ? '対になる 3 枚' : ' A・B 3 枚ずつ'}を厳密に探索（${fmtSec(ms / 1000)}）`, run);
+      if (cand.single && lastRank) {
+        for (const [label, list] of [['右上 (A)', lastRank.A], ['左下 (B)', lastRank.B]]) {
+          log(`  ${label} 上位: ${list.slice(0, 5).map((x, i) => `${i + 1}. ${cardById(x.id).name} ${x.complete ? '' : '≤ '}${pct(x.mean)}`).join('、')}`, run);
+        }
+      }
       if (st.sets.length) {
         const top = st.sets[0], { rowsA, colsB } = st.result;
         log(`${all ? '最適な防御' : '暫定の最適な防御'}${quick ? '（自分の 2 隅だけで評価）' : ''}: 期待勝率 ${all || quick ? '' : '≤ '}${pct(top.ev)}`, run);
@@ -968,23 +977,14 @@
     }
   }
 
-  // ---- 単一のカード ------------------------------------------------------------
-  // 選んだカード 1 枚だけを置き（反対側の自分の隅は空き）、相手の全応手（左上 × 右下、両方の向き）を評価する。
-  // シチョウ（Ladder）がほかの石で変わる形なら、相手の応手ごとに「単独のときと同じ / 変わる」に分けて最悪の値を出す。
+  // ---- 単一のカード（A・B それぞれのランキング） -------------------------------------------
+  // A × B の全組み合わせの値（相手の最善応手に対する黒の勝率）から、カードごとに
+  // 「相手側の各カード（向きは良いほう）と組んだときの値の平均」を求めて並べる。
+  // カードを選ぶと、相手側カードごとの内訳と、シチョウ（Ladder）の情報を表示する。
   const GTP = 'ABCDEFGHJKLMNOPQRST';
   const gtp = (x, y) => `${GTP[x]}${19 - y}`;
   const myCorner = (side) => (side === 'A' ? 'TR' : 'BL');
   const isSymCard = (id, key) => { const c = cardById(id); return stoneSig(c, key, false) === stoneSig(c, key, true); };
-  function singleEstimate() {
-    const card = anchorCard();
-    if (!card) return `${anchor.side === 'A' ? '右上 (A)' : '左下 (B)'} のカードを選んでください。`;
-    const key = myCorner(anchor.side);
-    const n = isSymCard(card.id, key) ? 1 : 2;
-    const upper = n * (1 + listCandidates('TL').length * listCandidates('BR').length);
-    const rate = store.get(RATE_KEY, 0);
-    return `${anchor.side === 'A' ? '右上 (A)' : '左下 (B)'} ${cardTxt(card)} を${n === 2 ? '両方の向きで' : ''}調べます。` +
-      `相手の応手（左上 × 右下）を全部評価すると最大 ${upper.toLocaleString()} 局面` + (rate ? `（直近の速度 ${rate.toFixed(0)} 局面/sで約 ${fmtSec(upper / rate)}）` : '');
-  }
   /** シチョウの連の説明。good = 黒（自分）に有利 */
   function ladderText(ch, r) {
     const who = `${ch.color === 'W' ? '白' : '黒'} ${ch.size} 子（${gtp(...ch.at)}）`;
@@ -993,9 +993,14 @@
     return { text: `${who}が${r ? 'シチョウで取られる' : '逃げられる'}`, good: !r };
   }
   const sameVec = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-  /** 向き o のシチョウの情報。相手の応手（ci, di）ごとの結果は combo(ci, di) で引く */
-  function ladderInfo(o, oppA, oppB) {
-    const pos = buildPosition(o.base);
+  /**
+   * カード 1 枚だけを置いた局面（向き flip、隅 key）のシチョウの情報。
+   * 相手のカード（左上・右下）1 枚、または自分の反対側のカード 1 枚を足したときに結果が変わるものを返す。
+   * 足した石が読みで見た点に重ならなければ、読み直さなくても結果は同じ
+   */
+  function ladderInfo(id, key, flip) {
+    const base = { TL: null, TR: null, BL: null, BR: null, [key]: { id, flip } };
+    const pos = buildPosition(base);
     // 単独のときに読み切れない連（シチョウの形ではない、複雑な攻め合いなど）は対象にしない
     const chains = Ladder.find(pos.stones, () => true).filter((ch) => ch.captured != null);
     if (!chains.length) return null;
@@ -1005,257 +1010,127 @@
       return { r, t };
     };
     const b0 = vecEx(pos.stones);
-    const ptsOf = (ck, p) => placedCardStones(cardById(p.id), ck, p.flip).map((q) => q.y * 19 + q.x);
-    // 1 枚足したときの結果。足した石が読みで見た点に重ならなければ、読み直さなくても結果は同じ
-    const single = (ck, p) => {
-      const pts = ptsOf(ck, p);
-      if (!pts.some((q) => b0.t.has(q))) return { hit: false, r: b0.r, t: b0.t, pts };
-      const p2 = buildPosition({ ...o.base, [ck]: p });
+    const changed = (ck, p) => {
+      const pts = placedCardStones(cardById(p.id), ck, p.flip).map((q) => q.y * 19 + q.x);
+      if (!pts.some((q) => b0.t.has(q))) return null;
+      const p2 = buildPosition({ ...base, [ck]: p });
       if (p2.conflicts.length) return null;
-      const e = vecEx(p2.stones);
-      return { hit: true, r: e.r, t: e.t, pts };
+      const r = vecEx(p2.stones).r;
+      return sameVec(r, b0.r) ? null : r;
     };
-    const tl = oppA.map((x) => single('TL', x)), br = oppB.map((x) => single('BR', x));
-    const combo = (ci, di) => {
-      const A = tl[ci], B = br[di];
-      if (!A || !B) return null;
-      if (!A.hit && !B.hit) return b0.r;
-      if (A.hit && !B.pts.some((q) => A.t.has(q))) return A.r;
-      if (B.hit && !A.pts.some((q) => B.t.has(q))) return B.r;
-      return vecEx(buildPosition({ ...o.base, TL: oppA[ci], BR: oppB[di] }).stones).r;
-    };
-    // 自分の反対側の隅のカードで変わるもの（組み合わせを選ぶときの参考）
-    const other = myCorner(anchor.side) === 'TR' ? 'BL' : 'TR';
-    const partners = [];
-    for (const c of activeCards().filter((x) => x.slot === CORNERS[other].slot && x.moves.length)) {
-      for (const flip of isSymCard(c.id, other) ? [false] : [false, true]) {
-        const r = single(other, { id: c.id, flip });
-        if (r && !sameVec(r.r, b0.r)) partners.push({ p: { id: c.id, flip }, r: r.r });
+    const scan = (ck) => {
+      const out = [];
+      for (const c of activeCards().filter((x) => x.slot === CORNERS[ck].slot && x.moves.length)) {
+        for (const f of isSymCard(c.id, ck) ? [false] : [false, true]) {
+          const r = changed(ck, { id: c.id, flip: f });
+          if (r) out.push({ p: { id: c.id, flip: f }, r, ck });
+        }
       }
-    }
-    const changers = (list, ck) => list.map((x, k) => (x && !sameVec(x.r, b0.r) ? { p: (ck === 'TL' ? oppA : oppB)[k], r: x.r, ck } : null)).filter(Boolean);
-    return { chains, base: b0.r, combo, partners, oppChangers: [...changers(tl, 'TL'), ...changers(br, 'BR')] };
+      return out;
+    };
+    return { chains, base: b0.r, opp: [...scan('TL'), ...scan('BR')], partners: scan(key === 'TR' ? 'BL' : 'TR') };
   }
 
-  async function runSingle() {
-    const card = anchorCard();
-    if (!card) { alert(`調べる${anchor.side === 'A' ? '右上 (A)' : '左下 (B)'} のカードを選んでください。`); return; }
-    const key = myCorner(anchor.side);
-    const flips = isSymCard(card.id, key) ? [false] : [false, true];
-    const oppA = listCandidates('TL'), oppB = listCandidates('BR');
-    await refreshEngineInfo();
-    clearDefense();
-    const run = st.run;
-    const alive = () => run === st.run;
-    const stopped = () => !alive() || st.cancel;
-    st.running = true; st.cancel = false;
-    $('#def-run').disabled = true; $('#def-cancel').disabled = false;
-    const ctxLines = [
-      `単一のカード: ${anchor.side === 'A' ? '右上 (A)' : '左下 (B)'} ${cardTxt(card)}（反対側の自分の隅は空き）${flips.length === 2 ? '、両方の向き' : '（反転しても同じ形）'}`,
-      `相手（挑戦・白）の応手: 全カード 左上 ${oppA.length} × 右下 ${oppB.length}（向き込み、衝突するものは除く）`,
-      `エンジン: ${engineText()} / ${+$('#visits').value || 1} visits / コミ ${KOMI}（アゲハマで調整）・日本ルール`,
-    ];
-    $('#def-context').innerHTML = ctxLines.map((l, k) => (k === 0 ? `<b>${esc(l)}</b>` : `<div class="muted">${esc(l)}</div>`)).join('');
-    log('入力パラメーター', run);
-    ctxLines.forEach((l) => log('  ' + l, run));
-
-    // 向きごとの評価対象: 相手なし（index 0）+ 衝突しない応手の組
-    const ors = flips.map((flip) => {
-      const me = { id: card.id, flip };
-      const base = { TL: null, TR: null, BL: null, BR: null, [key]: me };
-      const tls = [], brs = [];
-      oppA.forEach((x, k) => { if (!buildPosition({ ...base, TL: x }).conflicts.length) tls.push(k); });
-      oppB.forEach((x, k) => { if (!buildPosition({ ...base, BR: x }).conflicts.length) brs.push(k); });
-      const ci = [-1], di = [-1];
-      for (const a of tls) for (const b of brs) { ci.push(a); di.push(b); }
-      return { flip, me, base, ci: Int32Array.from(ci), di: Int32Array.from(di), wr: new Float64Array(ci.length).fill(NaN), lead: new Float32Array(ci.length), lad: new Int8Array(ci.length).fill(-1), info: null };
+  /**
+   * ランキング。rows = 自分の側のカード × 向き、cols = 相手側のカード × 向き、get(i, j) = 組の値。
+   * 自分の向きは相手側の向きで打ち消せる（(A^x, B^y) は (A^(x xor y), B) と同義）ので、点数は向きによらない
+   */
+  function rankSide(rows, cols, get, cellOf) {
+    const groups = new Map();
+    cols.forEach((x, j) => { if (!groups.has(x.id)) groups.set(x.id, []); groups.get(x.id).push(j); });
+    const byCard = new Map();
+    rows.forEach((x, i) => {
+      const partners = [];
+      for (const [pid, js] of groups) {
+        let best = null, bj = -1;
+        for (const j of js) { const v = get(i, j); if (v != null && (best == null || v > best)) { best = v; bj = j; } }
+        if (best != null) partners.push({ id: pid, v: best, cell: cellOf(i, bj) });
+      }
+      if (!partners.length) return;
+      const mean = partners.reduce((a, p) => a + p.v, 0) / partners.length;
+      const cur = byCard.get(x.id);
+      if (!cur || mean > cur.mean) byCard.set(x.id, { id: x.id, mean, partners, total: groups.size });
     });
-    // シチョウ（画面が固まらないよう、向きごとに区切って計算する）
-    for (const o of ors) {
-      await new Promise((res) => setTimeout(res, 0));
-      if (!alive()) return;
-      const t = performance.now();
-      o.info = ladderInfo(o, oppA, oppB);
-      if (o.info) {
-        // 相手の応手ごとに、シチョウが単独のときと同じか変わるかを分類する（画面が固まらないよう区切る）
-        o.lad[0] = 0;
-        let last = performance.now();
-        for (let j = 1; j < o.ci.length; j++) {
-          const r = o.info.combo(o.ci[j], o.di[j]);
-          o.lad[j] = r && sameVec(r, o.info.base) ? 0 : 1;
-          if (performance.now() - last > 30) {
-            $('#def-live').textContent = `シチョウを分類中（${o.flip ? '反転' : '反転なし'}）… ${j.toLocaleString()} / ${(o.ci.length - 1).toLocaleString()}`;
-            await new Promise((res) => setTimeout(res, 0));
-            if (!alive()) return;
-            last = performance.now();
-          }
-        }
-        log(`シチョウ（${o.flip ? '反転' : '反転なし'}）: ${o.info.chains.map((ch, k) => ladderText(ch, o.info.base[k]).text).join('、')}` +
-          ` / 相手のカード 1 枚で変わる ${o.info.oppChangers.length} 通り、自分の反対側のカードで変わる ${o.info.partners.length} 通り（${fmtSec((performance.now() - t) / 1000)}）`, run);
-      }
-    }
-    // キャッシュ（同じ条件なら続きから）
-    const sig = (p) => { const c = cardById(p.id); return [c.name, c.slot, p.flip, c.moves]; };
-    const cacheKey = optCache.key({ kind: 'defense-single-v1', engine: { engine: engineInfo.engine, version: engineInfo.version, model: engineInfo.model },
-      visits: +$('#visits').value || 1, komi: KOMI, side: anchor.side, card: sig(card), oppA: oppA.map(sig), oppB: oppB.map(sig) });
-    const saved = optCache.get(cacheKey);
-    if (saved) ors.forEach((o, k) => (saved.wr[k] || []).forEach((v, j) => { if (v != null) { o.wr[j] = v; o.lead[j] = saved.lead[k][j] || 0; } }));
-    const save = () => optCache.set(cacheKey, { wr: ors.map((o) => Array.from(o.wr, (v) => (Number.isNaN(v) ? null : Math.round(v * 1e5) / 1e5))),
-      lead: ors.map((o) => Array.from(o.lead, (v) => Math.round(v * 10) / 10)) });
-
-    const queue = [];
-    ors.forEach((o, k) => { for (let j = 0; j < o.ci.length; j++) if (Number.isNaN(o.wr[j])) queue.push([k, j]); });
-    const total = ors.reduce((a, o) => a + o.ci.length, 0);
-    const L = { evals: 0, done: total - queue.length, upper: total, t0: performance.now() };
-    if (saved && L.done) log(`前回の続きから再開します（評価済み ${L.done.toLocaleString()} / ${total.toLocaleString()} 局面）`, run);
-    log(`開始: ${total.toLocaleString()} 局面（向き ${ors.length} × 相手なし + 応手）`, run);
-    const plOf = (o, j) => (o.ci[j] < 0 ? o.base : { ...o.base, TL: oppA[o.ci[j]], BR: oppB[o.di[j]] });
-    let qi = 0, errors = 0, lastRender = 0;
-    const status = () => {
-      const el = (performance.now() - L.t0) / 1000, rate = L.evals / Math.max(el, 1e-3);
-      $('#def-live').innerHTML = liveHtml([`局面 ${L.done.toLocaleString()} / ${total.toLocaleString()}`, `経過 ${fmtSec(el)}`,
-        ...(L.evals ? [`${rate.toFixed(1)} 局面/s`, `完了まで約 ${fmtSec((total - L.done) / rate)}`] : ['最初の結果を待っています…'])]);
-      $('#def-progress').style.width = (100 * L.done / total) + '%';
-    };
-    status();
-    const timer = setInterval(() => { if (alive()) status(); }, 1000);
-    const worker = async () => {
-      while (!stopped() && qi < queue.length) {
-        const size = Math.max(1, +$('#batch').value || 32);
-        const batch = queue.slice(qi, qi + size); qi += batch.length;
-        const pos = batch.map(([k, j]) => buildPosition(plOf(ors[k], j)));
-        try {
-          await analyze(pos, (n, r) => {
-            if (!alive()) return;
-            const [k, j] = batch[n], o = ors[k];
-            L.done++;
-            if (r.error) { errors++; return; }
-            L.evals++;
-            o.wr[j] = 1 - r.winrateWhite; o.lead[j] = -r.scoreLeadWhite;
-          }, { abortable: true });
-        } catch (e) { if (e.name === 'AbortError') return; throw e; }
-        if (alive() && performance.now() - lastRender > PROVISIONAL_EVERY) { lastRender = performance.now(); renderSingle(ors, oppA, oppB, true); save(); }
-      }
-    };
-    try {
-      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-      if (!alive()) return;
-      clearInterval(timer);
-      const sec = (performance.now() - L.t0) / 1000;
-      if (L.evals && sec > 1) store.set(RATE_KEY, L.evals / sec);
-      save();
-      const all = L.done >= total;
-      $('#def-live').textContent = '';
-      $('#def-progress').style.width = (100 * L.done / total) + '%';
-      const msg = `${all ? '評価完了' : '中止'}: ${L.done.toLocaleString()} / ${total.toLocaleString()} 局面、今回 ${L.evals.toLocaleString()} 局面、${fmtSec(sec)}${errors ? `、エラー ${errors} 件` : ''}`;
-      $('#def-info').textContent = msg;
-      log(msg, run);
-      if (!all) log('同じ条件で再実行すると、これまでの結果を引き継いで続けます。', run);
-      renderSingle(ors, oppA, oppB, !all);
-    } catch (e) {
-      if (!alive()) return;
-      clearInterval(timer);
-      $('#def-info').textContent = 'エラー: ' + e.message;
-      log('エラー: ' + e.message, run);
-      save();
-    } finally {
-      clearInterval(timer);
-      if (alive()) { st.running = false; $('#def-run').disabled = false; $('#def-cancel').disabled = true; }
-    }
+    return [...byCard.values()].map((r) => {
+      const worst = r.partners.reduce((a, p) => (p.v < a.v ? p : a), r.partners[0]);
+      return { ...r, worst, n: r.partners.length, complete: r.partners.length === r.total && r.partners.every((p) => p.cell?.complete) };
+    }).sort((a, b) => b.mean - a.mean);
   }
-
-  /** 単一のカードの結果。シチョウの結果（単独のときと同じ / 変わる）ごとの最悪の値も出す */
-  let singleRows = [];
-  function renderSingle(ors, oppA, oppB, provisional) {
-    const box = $('#def-single');
-    box.classList.toggle('provisional', provisional);
-    const card = cardById(ors[0].me.id);
-    const plOf = (o, j) => (o.ci[j] < 0 ? o.base : { ...o.base, TL: oppA[o.ci[j]], BR: oppB[o.di[j]] });
-    const silCell = (pl) => { const rec = typeof igosilOf === 'function' ? igosilOf(pl) : null; return rec ? `<div class="muted" style="color:var(--accent)">シル ${pct(1 - rec.wrWhite)}</div>` : ''; };
-    const replyHtml = (o, j) => (o.ci[j] < 0 ? '<span class="muted">（相手なし）</span>' : `${cardHtml(oppA[o.ci[j]])}<br>${cardHtml(oppB[o.di[j]])}`);
-    singleRows = [];
-    let html = `<h3>「${esc(card.name)}」単独の評価${provisional ? '（暫定: 評価済みの応手から）' : ''}</h3>
-      <div class="muted">黒（自分）の勝率。反対側の自分の隅は空けた局面です。「最悪」は相手（白）が全カード・両方の向きから最善の応手をしたときの値です。</div>
-      <div class="scroll"><table><thead><tr><th>向き</th><th>相手なし</th><th>最悪（相手の最善応手）</th><th>平均</th><th>評価済みの応手</th><th>相手の最善応手</th></tr></thead><tbody>`;
-    const worst = [];
-    for (const o of ors) {
-      let min = Infinity, arg = -1, sum = 0, n = 0;
-      for (let j = 1; j < o.ci.length; j++) {
-        const v = o.wr[j]; if (Number.isNaN(v)) continue;
-        sum += v; n++;
-        if (v < min) { min = v; arg = j; }
-        worst.push([v, o, j]);
-      }
-      const none = o.wr[0];
-      const ri = singleRows.push({ pl: plOf(o, arg >= 0 ? arg : 0), wr: arg >= 0 ? min : none }) - 1;
-      html += `<tr class="clickable" data-single="${ri}"><td>${o.flip ? '反転' : '反転なし'}</td><td>${Number.isNaN(none) ? '—' : pct(none)}${silCell(o.base)}</td>
-        <td><b>${n ? pct(min) : '—'}</b>${arg >= 0 ? silCell(plOf(o, arg)) : ''}</td><td>${n ? pct(sum / n) : '—'}</td>
-        <td class="muted">${n.toLocaleString()} / ${(o.ci.length - 1).toLocaleString()}</td><td>${arg >= 0 ? replyHtml(o, arg) : '—'}</td></tr>`;
-    }
-    html += '</tbody></table></div>';
-    // シチョウ
-    for (const o of ors) {
-      const info = o.info;
-      if (!info) continue;
-      if (o.lad[0] === -1) {  // 応手ごとの分類（一度だけ）
-        o.lad[0] = 0;
-        for (let j = 1; j < o.ci.length; j++) { const r = info.combo(o.ci[j], o.di[j]); o.lad[j] = r && sameVec(r, info.base) ? 0 : 1; }
-      }
-      const grp = [{ min: Infinity, arg: -1, n: 0 }, { min: Infinity, arg: -1, n: 0 }];
-      let cnt = [0, 0];
-      for (let j = 1; j < o.ci.length; j++) {
-        cnt[o.lad[j]]++;
-        const v = o.wr[j]; if (Number.isNaN(v)) continue;
-        const g = grp[o.lad[j]]; g.n++;
-        if (v < g.min) { g.min = v; g.arg = j; }
-      }
-      html += `<h4>シチョウ（${o.flip ? '反転' : '反転なし'}）</h4><ul style="margin:2px 0 4px 18px;padding:0">` +
-        info.chains.map((ch, k) => { const t = ladderText(ch, info.base[k]); return `<li class="${t.good == null ? '' : t.good ? 'lad-good' : 'lad-bad'}">${esc(t.text)}（単独のとき）</li>`; }).join('') + '</ul>';
-      const changeText = (r) => info.chains.map((ch, k) => (r[k] === info.base[k] ? null : ladderText(ch, r[k]))).filter(Boolean)
-        .map((t) => `<span class="${t.good == null ? '' : t.good ? 'lad-good' : 'lad-bad'}">${esc(t.text)}</span>`).join('、');
-      if (!cnt[1]) html += '<div class="muted">相手のどの応手でも、シチョウの結果は単独のときと同じです。</div>';
-      else {
-        const row = (label, g, c) => {
-          if (g.arg < 0) return `<tr><td>${label}</td><td class="muted">${c.toLocaleString()} 通り</td><td>—</td><td></td></tr>`;
-          const ri = singleRows.push({ pl: plOf(o, g.arg), wr: g.min }) - 1;
-          return `<tr class="clickable" data-single="${ri}"><td>${label}</td><td class="muted">${c.toLocaleString()} 通り（評価済み ${g.n.toLocaleString()}）</td><td><b>${pct(g.min)}</b>${silCell(plOf(o, g.arg))}</td><td>${replyHtml(o, g.arg)}</td></tr>`;
-        };
-        html += `<div class="scroll"><table><thead><tr><th>相手の応手</th><th>数</th><th>最悪の黒勝率</th><th>そのときの応手</th></tr></thead><tbody>
-          ${row('シチョウが単独のときと同じ', grp[0], cnt[0])}${row('シチョウの結果が変わる', grp[1], cnt[1])}</tbody></table></div>`;
-        const opp = info.oppChangers.slice(0, 40);
-        if (opp.length) {
-          html += `<div class="muted" style="margin-top:4px">シチョウを変える相手のカード（${info.oppChangers.length} 通り）:</div><div>` +
-            opp.map((x) => `<div>${x.ck === 'TL' ? '左上' : '右下'} ${cardHtml(x.p)} → ${changeText(x.r)}</div>`).join('') + (info.oppChangers.length > opp.length ? '<div class="muted">…</div>' : '') + '</div>';
-        }
-      }
-      if (info.partners.length) {
-        const other = myCorner(anchor.side) === 'TR' ? '左下 (B)' : '右上 (A)';
-        html += `<div class="muted" style="margin-top:4px">シチョウを変える自分の${other}のカード（組み合わせを選ぶときの参考。${info.partners.length} 通り）:</div><div>` +
-          info.partners.slice(0, 40).map((x) => { const c = cardById(x.p.id); return `<div>${cardHtml(x.p)}${isOwned(c) ? (rankOf(c.id) ? ` <span class="muted">${rankText(c.id)}</span>` : '') : ' <span class="muted">未所持</span>'} → ${changeText(x.r)}</div>`; }).join('') + '</div>';
-      }
-    }
-    // 黒が最も苦しい応手
-    worst.sort((a, b) => a[0] - b[0]);
-    const top = worst.slice(0, 15);
-    if (top.length) {
-      html += `<h4>黒が最も苦しい相手の応手（上位 ${top.length}）</h4><div class="scroll"><table><thead><tr><th>#</th><th>黒勝率</th><th>向き</th><th>相手の応手</th><th>シチョウ</th></tr></thead><tbody>` +
-        top.map(([v, o, j], i) => {
-          const ri = singleRows.push({ pl: plOf(o, j), wr: v }) - 1;
-          const lad = o.info ? (o.lad[j] === 1 ? '<span class="lad-bad">変わる</span>' : '<span class="muted">同じ</span>') : '<span class="muted">—</span>';
-          return `<tr class="clickable" data-single="${ri}"><td>${i + 1}</td><td><b>${pct(v)}</b>${silCell(plOf(o, j))}</td><td>${o.flip ? '反転' : '反転なし'}</td><td>${replyHtml(o, j)}</td><td>${lad}</td></tr>`;
-        }).join('') + '</tbody></table></div>';
-    }
-    html += '<div class="muted" style="margin-top:4px">行をクリックすると、その配置を盤面に反映します。</div>';
+  let lastRank = null;
+  function renderRanking(cand, cells, provisional) {
+    const { rowsA, colsB, M, lookup } = buildMatrix(cand, cells);
+    const A = rankSide(rowsA, colsB, (i, j) => M[i][j], (i, j) => lookup(rowsA[i], colsB[j]));
+    const B = rankSide(colsB, rowsA, (i, j) => M[j][i], (i, j) => lookup(rowsA[j], colsB[i]));
+    const keep = lastRank?.sel || null;
+    lastRank = { cand, cells, provisional, A, B, sel: keep };
+    drawRanking();
+  }
+  function drawRanking() {
+    const R = lastRank, box = $('#def-single');
+    if (!R) { box.innerHTML = ''; return; }
+    box.classList.toggle('provisional', R.provisional);
+    const quick = R.cand.quick;
+    const val = (v, complete) => `${complete || quick ? '' : '≤ '}${pct(v)}`;
+    const cardCell = (id) => { const c = cardById(id); return `${cardHtml({ id, flip: false }).replace(/ <b>\(反転\)<\/b>/, '')}${isOwned(c) ? (rankOf(id) ? ` <span class="muted">${rankText(id)}</span>` : '') : ' <span class="muted">未所持</span>'}`; };
+    const table = (side, list) => `<h4>${side === 'A' ? '右上 (A)' : '左下 (B)'} のランキング（${list.length} 枚）</h4>
+      <div class="scroll"><table><thead><tr><th>#</th><th>カード</th><th>平均（黒）</th><th>最悪の相手側カード</th><th>評価済みの相手側</th></tr></thead><tbody>` +
+      list.map((r, i) => `<tr class="clickable${R.sel?.side === side && R.sel.id === r.id ? ' active' : ''}" data-rank-side="${side}" data-rank-id="${esc(r.id)}">
+        <td>${i + 1}</td><td>${cardCell(r.id)}</td><td><b>${val(r.mean, r.complete)}</b></td>
+        <td>${val(r.worst.v, r.worst.cell?.complete)} <span class="muted">${esc(cardById(r.worst.id).name)}</span></td>
+        <td class="muted">${r.n} / ${r.total}</td></tr>`).join('') + '</tbody></table></div>';
+    let html = `<h3>カードのランキング${quick ? '［自分の 2 隅だけで評価］' : ''}${R.provisional ? '（暫定: 評価済みの組から）' : ''}</h3>
+      <div class="muted">平均 = 相手側の各カード（向きは良いほう）と組んだときの、${quick ? '自分の 2 隅だけの局面' : '相手の最善応手に対する'}黒の勝率の平均。` +
+      `${quick ? '' : '「≤」は相手の応手をまだ全部評価していない値（評価が進むと下がることがあります）。'}行をクリックすると、相手側カードごとの内訳とシチョウの情報を表示します。</div>` +
+      table('A', R.A) + table('B', R.B) + '<div id="def-rank-detail"></div>';
     box.innerHTML = html;
-    lastSingle = { ors, oppA, oppB, provisional };
+    drawRankDetail();
   }
-  let lastSingle = null;
+  function drawRankDetail() {
+    const R = lastRank, el = $('#def-rank-detail');
+    if (!R?.sel || !el) { if (el) el.innerHTML = ''; return; }
+    const r = (R.sel.side === 'A' ? R.A : R.B).find((x) => x.id === R.sel.id);
+    if (!r) { el.innerHTML = ''; return; }
+    const quick = R.cand.quick, other = R.sel.side === 'A' ? '左下 (B)' : '右上 (A)';
+    const rows = [...r.partners].sort((a, b) => b.v - a.v);
+    let html = `<h4>「${esc(cardById(r.id).name)}」の内訳（相手側 ${other} のカードごと）</h4>
+      <div class="scroll"><table><thead><tr><th>${other}</th><th>黒勝率</th><th>右上 (A) / 左下 (B) の向き</th>${quick ? '' : '<th>相手の最善応手</th>'}</tr></thead><tbody>` +
+      rows.map((p, k) => {
+        const c = p.cell;
+        return `<tr class="clickable" data-rank-cell="${k}"><td>${esc(cardById(p.id).name)}${isOwned(cardById(p.id)) ? '' : ' <span class="muted">未所持</span>'}</td>
+          <td><b>${c ? vText(c) : pct(p.v)}</b>${silHtml(c)}</td><td class="muted">${c ? `${c.a.flip ? '反転' : 'そのまま'} / ${c.b.flip ? '反転' : 'そのまま'}` : ''}</td>
+          ${quick ? '' : `<td>${c?.resp ? `${cardHtml(c.resp.TL)}<br>${cardHtml(c.resp.BR)}` : ''}</td>`}</tr>`;
+      }).join('') + '</tbody></table></div><div class="muted">行をクリックすると、その組（と相手の最善応手）を盤面に反映します。</div>';
+    // シチョウ
+    const key = myCorner(R.sel.side);
+    const lad = (isSymCard(r.id, key) ? [false] : [false, true]).map((flip) => ({ flip, info: ladderInfo(r.id, key, flip) })).filter((x) => x.info);
+    if (!lad.length) html += '<div class="muted" style="margin-top:6px">シチョウの形はありません。</div>';
+    for (const { flip, info } of lad) {
+      const changeText = (v) => info.chains.map((ch, k) => (v[k] === info.base[k] ? null : ladderText(ch, v[k]))).filter(Boolean)
+        .map((t) => `<span class="${t.good == null ? '' : t.good ? 'lad-good' : 'lad-bad'}">${esc(t.text)}</span>`).join('、');
+      html += `<h4>シチョウ（${flip ? '反転' : 'そのまま'}、このカード 1 枚だけのとき）</h4><ul style="margin:2px 0 4px 18px;padding:0">` +
+        info.chains.map((ch, k) => { const t = ladderText(ch, info.base[k]); return `<li class="${t.good == null ? '' : t.good ? 'lad-good' : 'lad-bad'}">${esc(t.text)}</li>`; }).join('') + '</ul>';
+      html += info.opp.length
+        ? `<div class="muted">シチョウを変える相手のカード（${info.opp.length} 通り）:</div>` + info.opp.slice(0, 30).map((x) => `<div>${x.ck === 'TL' ? '左上' : '右下'} ${cardHtml(x.p)} → ${changeText(x.r)}</div>`).join('') + (info.opp.length > 30 ? '<div class="muted">…</div>' : '')
+        : '<div class="muted">相手のどのカードでも、シチョウの結果は変わりません。</div>';
+      if (info.partners.length) {
+        html += `<div class="muted" style="margin-top:4px">シチョウを変える自分の${other}のカード（${info.partners.length} 通り）:</div>` +
+          info.partners.slice(0, 30).map((x) => `<div>${cardHtml(x.p)}${isOwned(cardById(x.p.id)) ? '' : ' <span class="muted">未所持</span>'} → ${changeText(x.r)}</div>`).join('');
+      }
+    }
+    el.innerHTML = html;
+    el._rows = rows;
+  }
   $('#def-single').addEventListener('click', (ev) => {
-    const tr = ev.target.closest('tr[data-single]'); if (!tr) return;
-    const r = singleRows[+tr.dataset.single]; if (!r) return;
-    Object.assign(placement, { TL: null, TR: null, BL: null, BR: null }, r.pl);
-    syncCornerInputs(); onPlacementChange();
-    if (!$('#auto-eval').checked) setEval({ winrateWhite: 1 - r.wr, scoreLeadWhite: 0, visits: +$('#visits').value || 1 });
+    const tr = ev.target.closest('tr'); if (!tr || !lastRank) return;
+    if (tr.dataset.rankSide) {
+      const sel = { side: tr.dataset.rankSide, id: tr.dataset.rankId };
+      lastRank.sel = lastRank.sel?.side === sel.side && lastRank.sel.id === sel.id ? null : sel;  // もう一度押すと閉じる
+      drawRanking();
+      $('#def-rank-detail')?.scrollIntoView({ block: 'nearest' });
+    } else if (tr.dataset.rankCell) {
+      const p = $('#def-rank-detail')._rows?.[+tr.dataset.rankCell];
+      if (p?.cell) applyCell(p.cell);
+    }
   });
 
   renderBest();
@@ -1265,7 +1140,7 @@
   $('#def-fixed-clear').onclick = () => { fixed.A = [null, null, null]; fixed.B = [null, null, null]; renderFixed(); saveFixed(); };
   // refresh: 囲碁シル AI の記録が変わったときに表を描き直す
   window.defense = { bestSets, buildMatrix, topCards, clear: clearDefense,
-    refresh: () => { if (st.result) renderBest(); if (lastPairCells) renderPairs(lastPairCells); if (lastSingle) renderSingle(lastSingle.ors, lastSingle.oppA, lastSingle.oppB, lastSingle.provisional); } };  // テスト・デバッグ用
+    refresh: () => { if (st.result) renderBest(); if (lastPairCells) renderPairs(lastPairCells); if (lastRank) drawRanking(); } };  // テスト・デバッグ用
   $('#def-run').onclick = () => runDefense();
   $('#def-cancel').onclick = () => { st.cancel = true; abortAnalyze(); };
 })();
