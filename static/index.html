@@ -1631,6 +1631,7 @@ async function updateCards(html) {
   try {
     const r = await api('POST', '/api/cards/update', { url: $('#source-url').value.trim(), html });
     const lines = [`${r.count} 枚のカードを取得しました。`];
+    if (r.renamed?.length) lines.push(`名前の変更: ${r.renamed.join('、')}`);
     if (r.added.length) lines.push(`追加: ${r.added.join('、')}`);
     if (r.updated.length) lines.push(`更新: ${r.updated.join('、')}`);
     if (r.removed.length) lines.push(`記事から消えたカード（退役扱い）: ${r.removed.join('、')}`);

@@ -805,9 +805,25 @@ def card_id(name, slot):
 def merge_cards(old_cards, new_cards):
     """新しいリストを正としつつ、手動で入力した手順・修正は残す。"""
     by_key = {(c["name"], c.get("slot")): c for c in old_cards}
-    merged, added, updated = [], [], []
+    # 名前の修正: 名前で対応しないカードどうしで、A/B・属性・定石グループ・手順が同じなら同じカードとみなし、
+    # ID（所持・ランク・囲碁シルの記録が参照する）を引き継ぐ
+    sig = lambda c: json.dumps([c.get("slot"), c.get("attr"), c.get("group"), c.get("moves")], ensure_ascii=False)
+    unmatched_new = [nc for nc in new_cards if (nc["name"], nc.get("slot")) not in by_key]
+    by_sig = {}
+    for k, oc in by_key.items():
+        if oc.get("moves") and not oc.get("manual") and k not in {(n["name"], n.get("slot")) for n in new_cards}:
+            by_sig.setdefault(sig(oc), []).append(k)
+    renamed_from = {}
+    for nc in unmatched_new:
+        ks = by_sig.get(sig(nc)) if nc.get("moves") else None
+        if ks and len(ks) == 1:
+            renamed_from[id(nc)] = ks.pop()
+    merged, added, updated, renamed = [], [], [], []
     for nc in new_cards:
         oc = by_key.pop((nc["name"], nc.get("slot")), None)
+        if oc is None and id(nc) in renamed_from:
+            oc = by_key.pop(renamed_from[id(nc)])
+            renamed.append(f'{oc["name"]} → {nc["name"]}')
         card = {"id": card_id(nc["name"], nc.get("slot", "")), **nc}
         if oc:
             card["id"] = oc.get("id", card["id"])
@@ -827,7 +843,7 @@ def merge_cards(old_cards, new_cards):
         # 記事から消えたカードも削除はせず、退役扱いにして残す
         removed.append(oc["name"])
         merged.append({**oc, "retired": True})
-    return merged, added, updated, removed
+    return merged, added, updated, removed, renamed
 
 
 def fetch_page(url):
@@ -1058,10 +1074,10 @@ class Handler(SimpleHTTPRequestHandler):
         with self.cards_lock:
             data = load_cards()
             old = data.get("cards", [])
-            merged, added, updated, removed = merge_cards(old, new_cards)
+            merged, added, updated, removed, renamed = merge_cards(old, new_cards)
             data = {"source": source, "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S"), "cards": merged}
             save_cards(data)
-        self._json({"ok": True, "added": added, "updated": updated, "removed": removed,
+        self._json({"ok": True, "added": added, "updated": updated, "removed": removed, "renamed": renamed,
                     "warnings": warnings, "count": len(new_cards)})
 
 
