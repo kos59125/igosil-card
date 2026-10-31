@@ -278,8 +278,10 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 
     <div class="tab" id="tab-cards">
       <div class="row">
-        <input type="text" id="card-search" placeholder="カード名・定石グループで絞り込み" style="flex:1;min-width:140px">
+        <div id="card-filter" style="flex:1;min-width:220px"></div>
         <select id="card-slot-filter"><option value="">A/B すべて</option><option>A</option><option>B</option></select>
+        <select id="card-own-filter"><option value="">所持・未所持</option><option value="owned">所持のみ</option><option value="not">未所持のみ</option></select>
+        <span class="muted nw" id="cards-count"></span>
         <button id="btn-new-card">＋ 新規カード</button>
       </div>
       <div class="row">
@@ -1532,9 +1534,19 @@ function prisonerText(c) {
   if (!cap || (!cap.B && !cap.W)) return '';
   return `<div class="muted">アゲハマ ${cap.B ? '黒' + cap.B : ''}${cap.B && cap.W ? ' ' : ''}${cap.W ? '白' + cap.W : ''}</div>`;
 }
+// 絞り込み: 挑戦・防御の選択ボックスと同じ方法（属性・動物・カード・ランクのチップと文字入力）+ A/B + 所持
+const cardFilter = new CardPicker({
+  mode: 'filter',
+  placeholder: '属性・動物・カード名・ランクで絞り込み',
+  getItems: () => cards.map((c) => cardItem(c.id)),
+  onFilter: () => renderCardTable(),
+});
+$('#card-filter').appendChild(cardFilter.el);
 function renderCardTable() {
-  const q = $('#card-search').value.trim(), slot = $('#card-slot-filter').value;
-  const list = cards.filter((c) => (!q || c.name.includes(q) || (c.group || '').includes(q)) && (!slot || c.slot === slot));
+  const slot = $('#card-slot-filter').value, own = $('#card-own-filter').value;
+  const list = cards.filter((c) => cardFilter.matches(cardItem(c.id)) && (!slot || c.slot === slot) &&
+    (!own || (own === 'owned') === isOwned(c)));
+  $('#cards-count').textContent = list.length === cards.length ? `${cards.length} 枚` : `${list.length} / ${cards.length} 枚`;
   $('#card-table tbody').innerHTML = list.map((c) => `<tr>
       <td><input type="checkbox" data-own="${c.id}" ${isOwned(c) ? 'checked' : ''}></td>
       <td class="nw rank-stars${isOwned(c) ? '' : ' off'}" title="${isOwned(c) ? 'クリックでランクを設定（同じ星をもう一度クリックで解除）' : '所持カードのみランクを設定できます'}">${
@@ -1560,8 +1572,8 @@ $('#card-table').addEventListener('click', (ev) => {
     setRank(star.dataset.id, rankOf(star.dataset.id) === n ? null : n);
   }
 });
-$('#card-search').oninput = renderCardTable;
 $('#card-slot-filter').onchange = renderCardTable;
+$('#card-own-filter').onchange = renderCardTable;
 $('#btn-all-owned').onclick = () => { notOwned.clear(); store.set('notOwned', []); renderCardTable(); renderCorners(); };
 $('#btn-none-owned').onclick = () => { notOwned = new Set(cards.map((c) => c.id)); store.set('notOwned', [...notOwned]); renderCardTable(); renderCorners(); };
 
